@@ -1,10 +1,12 @@
 #
 #       Denon & Marantz AVR plugin
 #
-#       Author:     Dnpwwo, 2016 - 2017, Artemgy 2017
+#       Author:     Dnpwwo, 2016 - 2017, Artemgy 2017, elgringo 2017
 #
 #   Mode3 ("Sources") needs to have '|' delimited names of sources that the Denon knows about.  
 #   The Selector can be changed afterwards to any text and the plugin will still map to the actual Denon name.
+#   
+#   Adjust for marantz sr5009
 #
 """
 <plugin key="DenonMarantz" version="2.5.5" name="Denon / Marantz AVR Amplifier" author="dnpwwo/artemgy" wikilink="" externallink="http://www.denon.co.uk/uk">

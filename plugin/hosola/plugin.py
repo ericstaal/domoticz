@@ -1,9 +1,6 @@
-# Basic Python Plugin Example
-#
-# Author: GizMoCuz
-#
+
 """
-<plugin key="Hosola_Omnik" name="Hosola / Omnik solar inverter" author="elgringo" version="1.0.0" externallink="https://www.google.com/">
+<plugin key="Hosola_Omnik" name="Hosola / Omnik solar inverter" author="elgringo" version="1.0.0" externallink="https://github.com/ericstaal/domoticz/tree/master/plugin/hosola">
   <description>
 Connects to Hosola / Omnik solar inverter, auto detect 1,2 or 3 phases used. 
   </description>
@@ -94,7 +91,7 @@ class BasePlugin:
       self.totalEnergy = GetTotalEnergy(Devices[7].sValue)
     elif  (10 in Devices):
       self.totalEnergy = GetTotalEnergy(Devices[10].sValue)
-    Domoticz.Debug("Current total energy: "+str(self.totalEnergy))
+    Domoticz.Log("Current total energy: "+str(self.totalEnergy))
     # id 1= temp
     # id 2= VAC phase 1
     # id 3= VDC phase 1
@@ -119,11 +116,8 @@ class BasePlugin:
 
   def onMessage(self, Connection, Data, Status, Extra):
     self.readBytes.extend(Data) 
-    #Domoticz.Debug("Received so far: "+createByteString(self.readBytes))
-    # if header is OK
     
     if len(self.readBytes) > 155:
-      #Domoticz.Debug("154: "+ str(self.readBytes[154])+str(self.readBytes[155]))
       if (self.readBytes[0] == 0x68 and self.readBytes[1] == 0x73 and self.readBytes[2] == 0x41):
         self.oustandingMessages = self.oustandingMessages - 1
     
