@@ -1,13 +1,13 @@
-#!/usr/bin/python2
+#!/usr/bin/python3
 
 # doorbell based on interrupt with filtering and logging
 
 # settings
 GPIO_doorbell = 26                  # BCM Pin number
 domoticzidx = 29                    # ID of doorbell
-domoticzserver="127.0.0.1:8080"     # IP / port domoticz
-domoticzusername = "USER"           # username
-domoticzpassword = "PASSWORD"       # password
+domoticzserver="192.168.13.88:8080" # IP / port domoticz
+domoticzusername = "pi"             # username
+domoticzpassword = "pi"             # password
 
 mintimebetweenrings = 1             # in seconds (means bell is 2\X seconds blind after a press)
 logrings = True                     # logging to stdout
@@ -17,27 +17,28 @@ maxbuttonpressed = 5000             # time (ms)to wait until button press is ove
 
 import RPi.GPIO as GPIO
 import time
-import urllib2
+import urllib.request 
 import json
-import base64
 import traceback
 import sys
+from base64 import b64encode
 
 # Setup IO
 GPIO.setwarnings(False) 
 GPIO.setmode(GPIO.BCM) # BOARD does not work for pin 29
 GPIO.setup(GPIO_doorbell, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
-base64string = base64.encodestring('%s:%s' % (domoticzusername, domoticzpassword)).replace('\n', '')
+inlog ='%s:%s' % (domoticzusername, domoticzpassword) 
+base64string = b64encode(inlog.encode('utf-8')).decode('utf-8')
 
 def microTime():
   return int(round(time.time() * 1000))
   
 def domoticzrequest (url):
-  request = urllib2.Request(url)
+  request = urllib.request.Request(url)
   request.add_header("Authorization", "Basic %s" % base64string)
-  response = urllib2.urlopen(request)
-  return response.read()
+  response = urllib.request.urlopen(request)
+  return response.read().decode('utf-8')
   
 def microtimeToString(microtime):
   return time.strftime("%d-%m-%Y %H:%M:%S", time.localtime(microtime/1000))
@@ -60,24 +61,24 @@ while True:
       result = GPIO.wait_for_edge(GPIO_doorbell, GPIO.RISING, timeout=maxbuttonpressed)
       if result is None:
         if logrings:
-          print "Doorbell pressed at "+ microtimeToString(timePressed)+" but not released after "+str(maxbuttonpressed)+" milliseconds, ignored."
+          print ("Doorbell pressed at "+ microtimeToString(timePressed)+" but not released after "+str(maxbuttonpressed)+" milliseconds, ignored.")
       else:
         timeLoose = microTime()
         pressedtime = timeLoose - timePressed
         
         if (pressedtime > minbuttonpressed):
           if logrings:
-            print "Doorbell pressed at "+ microtimeToString(timePressed)+" for "+str(pressedtime)+ " milliseconds, notified Domoticz."
+            print ("Doorbell pressed at "+ microtimeToString(timePressed)+" for "+str(pressedtime)+ " milliseconds, notified Domoticz.")
           reportBell()
    
         else:
           if logrings:
-            print "Doorbell pressed at "+ microtimeToString(timePressed)+" for "+str(pressedtime)+ " milliseconds, minimal of "+ str(minbuttonpressed) +" is required, ignored."
+            print ("Doorbell pressed at "+ microtimeToString(timePressed)+" for "+str(pressedtime)+ " milliseconds, minimal of "+ str(minbuttonpressed) +" is required, ignored.")
     else:
       if logrings:
-        print "Doorbell pressed at "+ microtimeToString(timePressed)+", notified Domoticz"
+        print ("Doorbell pressed at "+ microtimeToString(timePressed)+", notified Domoticz")
       reportBell()
   except Exception as e:
-    print "Error occured: "+ traceback.format_exc()
+    print ("Error occured: "+ traceback.format_exc())
 
 
