@@ -1,14 +1,17 @@
+# HOSOLA
+#
+# Author: elgringo
 
 """
-<plugin key="Hosola_Omnik" name="Hosola / Omnik solar inverter" author="elgringo" version="1.0.0" externallink="https://github.com/ericstaal/domoticz/tree/master/plugin/hosola">
+<plugin key="Hosola_Omnik" name="Hosola solar inverter" author="elgringo" version="1.0.0" externallink="https://github.com/ericstaal/domoticz/tree/master/plugin/hosola/">
   <description>
-Connects to Hosola / Omnik solar inverter, auto detect 1,2 or 3 phases used. 
+Connects to Hosola or Omnik solar inverter, auto detect 1,2 or 3 phases used. 
   </description>
   <params>
     <param field="Address" label="IP Address" width="200px" required="true" default="127.0.0.1"/>
     <param field="Port" label="Port" width="30px" required="true" default="8899"/>
     <param field="Mode1" label="Serial number (intefers only)" width="150px" required="true" />
-    <param field="Mode2" label="Disconnect after " width="50px" required="true">
+    <param field="Mode2" label="Disconnect after" width="50px" required="true">
       <options>
         <option label="0" value="0"/>
         <option label="1" value="1"/>
@@ -36,6 +39,7 @@ class BasePlugin:
   totalEnergy = 0.0             # inital values
   inverterId = None
   readBytes = bytearray()
+  nextConnect = 1
   
   oustandingMessages = 0
   
@@ -78,6 +82,7 @@ class BasePlugin:
     if Parameters["Mode6"] == "Debug":
       Domoticz.Debugging(1)
       
+    Domoticz.Heartbeat(15)
     self.createInverterId()
     
     # add temperatur is not exists
@@ -104,6 +109,7 @@ class BasePlugin:
     # id 10= Power phase 3
     self.connection = Domoticz.Connection(Name="Binair", Transport="TCP/IP", Protocol="None", Address=Parameters["Address"], Port=Parameters["Port"])
     if self.inverterId is not None:
+      self.nextConnect = 1
       self.connection.Connect()
 
   def onStop(self):
@@ -111,14 +117,20 @@ class BasePlugin:
     return
 
   def onConnect(self, Connection, Status, Description):
-    Domoticz.Log("Connected to: "+Connection.Address+":"+Connection.Port)
-    self.sendNullValues()
+    self.nextConnect = 0
+    if (Status == 0):
+      Domoticz.Log("Connected successfully to: "+Connection.Address+":"+Connection.Port)
+      self.sendNullValues()
+    else:
+      Domoticz.Log("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description)
+      self.connection.Disconnect()
+    return
 
   def onMessage(self, Connection, Data, Status, Extra):
     self.readBytes.extend(Data) 
     
     if len(self.readBytes) > 155:
-      if (self.readBytes[0] == 0x68 and self.readBytes[1] == 0x73 and self.readBytes[2] == 0x41):
+      if (self.readBytes[0] == 0x68 and self.readBytes[2] == 0x41): # what is the inital series?
         self.oustandingMessages = self.oustandingMessages - 1
     
       if (self.readBytes[154]==0x4F and self.readBytes[155] == 0x4B): 
@@ -162,7 +174,10 @@ class BasePlugin:
         
         UpdateDevice(1, temperature)
         self.readBytes = bytearray()
-      
+        
+      else:
+        Domoticz.Error("Incorrect messsage: "+createByteString(self.readBytes))
+        self.readBytes = bytearray()
       
 
   def onCommand(self, Unit, Command, Level, Hue):
@@ -176,7 +191,7 @@ class BasePlugin:
   def onDisconnect(self, Connection):
     self.oustandingMessages = 0
     Domoticz.Log("Disconnected from: "+Connection.Address+":"+Connection.Port)
-    self.sendNullValues()
+    
     
   def sendNullValues(self):
     UpdateDevice(1, 0)
@@ -195,6 +210,7 @@ class BasePlugin:
     # send identifier
     if self.connection.Connected() == True:
       if self.oustandingMessages > int(Parameters["Mode2"]):
+        self.sendNullValues()
         self.connection.Disconnect()
       else:
         self.oustandingMessages = self.oustandingMessages + 1
@@ -204,7 +220,10 @@ class BasePlugin:
         self.connection.Send(self.inverterId)
     else:
       if self.inverterId is not None:
-        self.connection.Connect()
+        if self.nextConnect <= 0:
+          self.nextConnect = 1
+          self.connection.Connect()
+          
 
 
 global _plugin
