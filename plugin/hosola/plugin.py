@@ -123,7 +123,7 @@ class BasePlugin:
       self.sendNullValues()
     else:
       Domoticz.Log("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description)
-      self.connection.Disconnect()
+      
     return
 
   def onMessage(self, Connection, Data, Status, Extra):
