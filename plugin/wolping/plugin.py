@@ -183,6 +183,10 @@ def onHeartbeat():
     global _plugin
     _plugin.onHeartbeat()
 
+def onCommand(Unit, Command, Level, Hue):
+  global _plugin
+  _plugin.onCommand(Unit, Command, Level, Hue)    
+    
 # Generic helper functions
 def DumpConfigToLog():
     for x in Parameters:
