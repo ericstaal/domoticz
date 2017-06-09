@@ -3,15 +3,15 @@
 # Author: elgringo
 
 """
-<plugin key="Hosola_Omnik" name="Hosola solar inverter" author="elgringo" version="1.0.0" externallink="https://github.com/ericstaal/domoticz/tree/master/plugin/hosola/">
+<plugin key="Hosola_Omnik" name="Hosola / Omnik solar inverter" author="elgringo" version="1.0.1" externallink="https://github.com/ericstaal/domoticz/tree/master/plugin/hosola/">
   <description>
 Connects to Hosola or Omnik solar inverter, auto detect 1,2 or 3 phases used. 
   </description>
   <params>
-    <param field="Address" label="IP Address" width="200px" required="true" default="127.0.0.1"/>
-    <param field="Port" label="Port" width="30px" required="true" default="8899"/>
-    <param field="Mode1" label="Serial number (intefers only)" width="150px" required="true" />
-    <param field="Mode2" label="Disconnect after" width="50px" required="true">
+    <param field="Address" label="IP Address"                    width="200px" required="true" default="127.0.0.1"/>
+    <param field="Port"    label="Port"                          width="30px"  required="true" default="8899"/>
+    <param field="Mode1"   label="Serial number (intefers only)" width="150px" required="true" />
+    <param field="Mode2"   label="Disconnect after (tries)"      width="50px"  required="true">
       <options>
         <option label="0" value="0"/>
         <option label="1" value="1"/>
@@ -20,6 +20,16 @@ Connects to Hosola or Omnik solar inverter, auto detect 1,2 or 3 phases used.
         <option label="4" value="4"/>
         <option label="5" value="5"/>
         <option label="6" value="6"/>
+      </options>
+    </param>
+    <param field="Mode3"   label="Heartbeat interval"            width="50px"  required="true">
+      <options>
+        <option label="5" value="5"/>
+        <option label="10" value="10"/>
+        <option label="15" value="15" default="true"/>
+        <option label="20" value="20" />
+        <option label="25" value="25"/>
+        <option label="30" value="30"/>
       </options>
     </param>
     <param field="Mode6" label="Debug" width="75px">
@@ -39,7 +49,8 @@ class BasePlugin:
   totalEnergy = 0.0             # inital values
   inverterId = None
   readBytes = bytearray()
-  nextConnect = 1
+  
+  busyConnecting = False
   
   oustandingMessages = 0
   
@@ -77,15 +88,14 @@ class BasePlugin:
     except:
       Domoticz.Error (Parameters["Mode1"]+" is not a valid serial number!")
   
-  
   def onStart(self):
     if Parameters["Mode6"] == "Debug":
       Domoticz.Debugging(1)
-      
-    Domoticz.Heartbeat(15)
+    
+    Domoticz.Heartbeat(int(Parameters["Mode3"])) 
     self.createInverterId()
     
-    # add temperatur is not exists
+    # add temperature if not exists
     if (1 not in Devices):
       Domoticz.Device(Name="Temperature", Unit=1, Type=80, Subtype=5, Switchtype=0, Image=0).Create()
       
@@ -107,23 +117,41 @@ class BasePlugin:
     # id 8= VAC phase 3
     # id 9= VDC phase 3
     # id 10= Power phase 3
-    self.connection = Domoticz.Connection(Name="Binair", Transport="TCP/IP", Protocol="None", Address=Parameters["Address"], Port=Parameters["Port"])
-    if self.inverterId is not None:
-      self.nextConnect = 1
-      self.connection.Connect()
+    
+    #self.checkConnection()
 
   def onStop(self):
     Domoticz.Log("onStop called")
     return
 
+  def checkConnection(self, checkonly = False):
+    # Check connection and connect none
+    isConnected = False
+    if self.connection is None:
+      self.connection = Domoticz.Connection(Name="Hosola_OmnikBinair", Transport="TCP/IP", Protocol="None", Address=Parameters["Address"], Port=Parameters["Port"])
+    
+    if self.connection.Connected() == True:
+      isConnected = True
+    else:
+      if self.busyConnecting:
+        isConnected = False
+      else:
+        if not checkonly:
+          self.oustandingMessages = 0
+          self.busyConnecting = True
+          self.connection.Connect() # if failed (??) set self.busyConnecting back to false, create new conenction (??)
+        isConnected = False
+    return isConnected
+      
   def onConnect(self, Connection, Status, Description):
-    self.nextConnect = 0
+    self.busyConnecting = False
     if (Status == 0):
       Domoticz.Log("Connected successfully to: "+Connection.Address+":"+Connection.Port)
       self.sendNullValues()
     else:
       Domoticz.Log("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description)
-      
+      # destroy connection and create a new one
+      self.connection = None
     return
 
   def onMessage(self, Connection, Data, Status, Extra):
@@ -189,9 +217,10 @@ class BasePlugin:
     return
 
   def onDisconnect(self, Connection):
-    self.oustandingMessages = 0
+    # self.busyConnecting = False Should not be needed
     Domoticz.Log("Disconnected from: "+Connection.Address+":"+Connection.Port)
-    
+    self.connection = None # reset connection
+    return
     
   def sendNullValues(self):
     UpdateDevice(1, 0)
@@ -205,25 +234,19 @@ class BasePlugin:
     UpdateDevice(9, 0)
     UpdateDevice(10, 0, self.totalEnergy)
     
-
   def onHeartbeat(self):
     # send identifier
-    if self.connection.Connected() == True:
+    if self.checkConnection(): # checks if connect if not retry
       if self.oustandingMessages > int(Parameters["Mode2"]):
         self.sendNullValues()
         self.connection.Disconnect()
       else:
-        self.oustandingMessages = self.oustandingMessages + 1
-        if (len(self.readBytes) > 0):
-          Domoticz.Error("Erased (send new request): "+createByteString(self.readBytes))
-          self.readBytes = bytearray()  # clear all bytes read
-        self.connection.Send(self.inverterId)
-    else:
-      if self.inverterId is not None:
-        if self.nextConnect <= 0:
-          self.nextConnect = 1
-          self.connection.Connect()
-          
+        if self.inverterId is not None: # Only send message if inverter id is known
+          self.oustandingMessages = self.oustandingMessages + 1
+          if (len(self.readBytes) > 0):
+            Domoticz.Error("Erased (send new request): "+createByteString(self.readBytes))
+            self.readBytes = bytearray()  # clear all bytes read
+          self.connection.Send(self.inverterId)
 
 
 global _plugin

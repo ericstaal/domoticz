@@ -67,12 +67,11 @@ import random
 import urllib.request 
 import json
 from base64 import b64encode
-#import calendar
-#import os.path
-#import os
+
 
 class BasePlugin:
   connection = None
+  busyConnecting = False
   
   # some messages
   commandOn = b'\x71\x23\x0F\xA3'
@@ -90,18 +89,37 @@ class BasePlugin:
   mustSendUpdate = False    # if the domotica values has been changed but not yet updated to the ledenet (connection problems)
   openStatusRequest = 0     # noff send status request without answer
   
+  domoticzusername = "user"   # needed to get sunset times
+  domoticzpassword = "pass"
+      
   def __init__(self):
     return
 
+  def checkConnection(self, checkonly = False):
+    # Check connection and connect none
+    isConnected = False
+    if self.connection is None:
+      self.connection = Domoticz.Connection(Name="LedenetBinair", Transport="TCP/IP", Protocol="None", Address=Parameters["Address"], Port=Parameters["Port"])
+      
+    if self.connection.Connected() == True:
+      isConnected = True
+    else:
+      if self.busyConnecting:
+        isConnected = False
+      else:
+        if not checkonly:
+          self.openStatusRequest = 0
+          self.busyConnecting = True
+          self.connection.Connect() # if failed (??) set self.busyConnecting back to false, create new conenction (??)
+        isConnected = False
+    return isConnected
+    
   def onStart(self):
     # Read setting. if not debug mode heart is reduces to 20 sec
     if Parameters["Mode6"] == "Debug":
       Domoticz.Debugging(1)
     else:
       Domoticz.Heartbeat(20)
-   
-    # initialize a connection with the controller
-    self.connection = Domoticz.Connection(Name="Binairy", Transport="TCP/IP", Protocol="None", Address=Parameters["Address"], Port=Parameters["Port"])
    
     if (len(Devices) == 0):
       # 241 = limitless, subtype 2= RGB/ 1= RGBW, switchtype 7 = philip
@@ -116,33 +134,55 @@ class BasePlugin:
       #Domoticz.Device(Name="RGB Light", Unit=7, Type=241, Subtype=2, Switchtype=7).Create() 
       #Domoticz.Device(Name="Saturatie", Unit=8, Type=244, Subtype=73, Switchtype=7).Create() 
     
+    # ICONS
+    if ("LedenetAutoLight" not in Images): Domoticz.Image('LedenetAutoLight.zip').Create()
+    if ("LedenetLedRed" not in Images): Domoticz.Image('LedenetLedRed.zip').Create()
+    if ("LedenetedBlue" not in Images): Domoticz.Image('LedenetLedBlue.zip').Create()
+    if ("LedenetLedGreen" not in Images): Domoticz.Image('LedenetLedGreen.zip').Create()
+    if ("LedenetLedYellow" not in Images): Domoticz.Image('LedenetLedYellow.zip').Create()
+    
+    if (1 in Devices):
+      Devices[1].Update(nValue=Devices[1].nValue, sValue=str(Devices[1].sValue), Image=Images["LedenetLedRed"].ID)
+    if (2 in Devices):
+      Devices[2].Update(nValue=Devices[2].nValue, sValue=str(Devices[2].sValue), Image=Images["LedenetLedGreen"].ID)
+    if (3 in Devices):
+      Devices[3].Update(nValue=Devices[3].nValue, sValue=str(Devices[3].sValue), Image=Images["LedenetLedBlue"].ID)
+    if (4 in Devices):
+      Devices[4].Update(nValue=Devices[4].nValue, sValue=str(Devices[4].sValue), Image=Images["LedenetLedYellow"].ID)
+    if (5 in Devices):
+      Devices[5].Update(nValue=Devices[5].nValue, sValue=str(Devices[5].sValue), Image=Images["LedenetAutoLight"].ID)
+ 
     # autolight is not saves in the devices itself
     self.autolight = Devices[5].nValue != 0
     
     # set default values:
     self.currentStatus[0] = False
     for i in range(1,5):
-      self.dimmerValues[i] = int(Devices[i].sValue.strip('\''))
+      try:
+        self.dimmerValues[i] = int(Devices[i].sValue.strip('\''))
+      except:
+        pass
       self.currentStatus[i] = self.uiToRGB(self.dimmerValues[i])
       
       
     Domoticz.Log("Started current status: " + str(self.currentStatus) + " dimmer values: " + str(self.dimmerValues) )
     # Connect 
-    self.connection.Connect()
+    #self.checkConnection()
   
   def onConnect(self, Connection, Status, Description):
+    self.busyConnecting = False
     if (Status == 0):
-      Domoticz.Log("Connected successfully to: "+Parameters["Address"]+":"+Parameters["Port"])
-      self.onHeartbeat()
-      
+      Domoticz.Log("Connected successfully to: "+Connection.Address+":"+Connection.Port)
     else:
-      Domoticz.Log("Failed to connect ("+str(Status)+") to: "+Parameters["Address"]+":"+Parameters["Port"]+" with error: "+Description)
+      Domoticz.Log("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description)
+      # destroy connection and create a new one
+      self.connection = None
       self.SyncDevices()
     return
 
   def onDisconnect(self, Connection):
     Domoticz.Log("Device has disconnected: "+Connection.Address+":"+Connection.Port+" missed "+str(self.openStatusRequest) + " status requests")
-    self.openStatusRequest = 0
+    self.connection = None # reset connection
     return
         
   def onMessage(self, Connection, Data, Status, Extra):
@@ -225,7 +265,7 @@ class BasePlugin:
       return int(round(val/2.55))
   
   def updateController(self): # send update from domtoicz to ledenet
-    if (self.connection.Connected() == True):
+    if self.checkConnection(True):
       updateColor = False
       Domoticz.Debug("Current: " + str(self.currentStatus) + " requested: " + str(self.requestedStatus))
   
@@ -283,11 +323,9 @@ class BasePlugin:
     
     try:
       domoticzurl = 'http://127.0.0.1:8080/json.htm?type=command&param=getSunRiseSet'
-      domoticzusername = "username"
-      domoticzpassword = "password"
       encoding = 'utf-8'
       
-      inlog = '%s:%s' % (domoticzusername, domoticzpassword) 
+      inlog = '%s:%s' % (self.domoticzusername, self.domoticzpassword) 
       base64string = b64encode(inlog.encode(encoding)).decode(encoding)
       request = urllib.request.Request(domoticzurl)
       request.add_header("Authorization", "Basic %s" % base64string)
@@ -299,8 +337,9 @@ class BasePlugin:
       now = datetime.now()
       ret = datetime(now.year, now.month, now.day, int(time[0]), int(time[1]), 0)
       # when started after sunset use 'now'
+      now = now + timedelta(minutes = int(Parameters["Mode4"])) 
       if (now > ret):
-        ret = now
+        ret = ret + timedelta(days = 1) 
       return ret
     except Exception as e:
       Domoticz.Log("Error retrieving Sunset: "+ str(e))
@@ -412,7 +451,8 @@ class BasePlugin:
     Domoticz.Log("Stopped")
     
   def onHeartbeat(self):
-    if (self.connection.Connected() == True):
+  
+    if self.checkConnection():
       uiUpdated = False
       if self.autolight:
         if (len(self.autolightDataset) == 0): 
@@ -438,10 +478,7 @@ class BasePlugin:
             self.readata = bytearray()
             self.connection.Send(self.commandStatus)
             self.openStatusRequest = self.openStatusRequest + 1
-        
-    else:
-      self.connection.Connect()
-        
+           
   
 global _plugin
 _plugin = BasePlugin()
@@ -505,4 +542,3 @@ def stringToMinutes(value):
   else:
     minutes = int(splitted[0])
   return minutes  
-  

@@ -4,7 +4,7 @@
 
 # settings
 GPIO_doorbell = 26                  # BCM Pin number
-domoticzidx = 29                    # ID of doorbell
+domoticzidx = 48                    # ID of doorbell
 domoticzserver="192.168.13.88:8080" # IP / port domoticz
 domoticzusername = "pi"             # username
 domoticzpassword = "pi"             # password
