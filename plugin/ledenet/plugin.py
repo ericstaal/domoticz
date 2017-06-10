@@ -71,7 +71,7 @@ from base64 import b64encode
 
 class BasePlugin:
   connection = None
-  busyConnecting = False
+  connectionState = 0 # 0 = disconnect, 1= connecting 2 = connect
   
   # some messages
   commandOn = b'\x71\x23\x0F\xA3'
@@ -90,7 +90,7 @@ class BasePlugin:
   openStatusRequest = 0     # noff send status request without answer
   
   domoticzusername = "user"   # needed to get sunset times
-  domoticzpassword = "pass"
+  domoticzpassword = "pwd"
       
   def __init__(self):
     return
@@ -98,22 +98,24 @@ class BasePlugin:
   def checkConnection(self, checkonly = False):
     # Check connection and connect none
     isConnected = False
+    
     if self.connection is None:
       self.connection = Domoticz.Connection(Name="LedenetBinair", Transport="TCP/IP", Protocol="None", Address=Parameters["Address"], Port=Parameters["Port"])
       
-    if self.connection.Connected() == True:
+    if self.connectionState == 2:
       isConnected = True
     else:
-      if self.busyConnecting:
+      if self.connectionState == 1:
         isConnected = False
       else:
         if not checkonly:
           self.openStatusRequest = 0
-          self.busyConnecting = True
-          self.connection.Connect() # if failed (??) set self.busyConnecting back to false, create new conenction (??)
+          self.connectionState = 1
+          self.connection.Connect() # if failed (??) set self.connectionState back to false, create new connection (??)
         isConnected = False
+
     return isConnected
-    
+  
   def onStart(self):
     # Read setting. if not debug mode heart is reduces to 20 sec
     if Parameters["Mode6"] == "Debug":
@@ -170,18 +172,21 @@ class BasePlugin:
     #self.checkConnection()
   
   def onConnect(self, Connection, Status, Description):
-    self.busyConnecting = False
+    
     if (Status == 0):
+      self.connectionState = 2
       Domoticz.Log("Connected successfully to: "+Connection.Address+":"+Connection.Port)
     else:
+      self.connectionState = 0
       Domoticz.Log("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description)
       # destroy connection and create a new one
       self.connection = None
-      self.SyncDevices()
+      self.updateDevices()
     return
 
   def onDisconnect(self, Connection):
     Domoticz.Log("Device has disconnected: "+Connection.Address+":"+Connection.Port+" missed "+str(self.openStatusRequest) + " status requests")
+    self.connectionState = 0
     self.connection = None # reset connection
     return
         
@@ -211,7 +216,7 @@ class BasePlugin:
       else:
         self.skipStatus = False      
         
-      self.readata = bytearray()
+      self.readata.clear()
     return
 
   def onCommand(self, Unit, Command, Level, Hue):
@@ -448,7 +453,9 @@ class BasePlugin:
       self.updateDevices()
     
   def onStop(self):
-    Domoticz.Log("Stopped")
+    self.connection = None
+    self.connectionState = 0
+    # cleanup?
     
   def onHeartbeat(self):
   
@@ -475,7 +482,7 @@ class BasePlugin:
           if self.mustSendUpdate:
             self.updateController()
           else:
-            self.readata = bytearray()
+            self.readata.clear()
             self.connection.Send(self.commandStatus)
             self.openStatusRequest = self.openStatusRequest + 1
            
