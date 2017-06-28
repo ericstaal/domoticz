@@ -47,18 +47,18 @@ class BasePlugin:
     
   connection = None
   totalEnergy = 0.0             # inital values
-  inverterId = None
+  inverterId = bytearray()
   readBytes = bytearray()
   
-  busyConnecting = False
-  
+  connectionState = 0 # 0 = disconnect, 1= connecting 2 = connect
+    
   oustandingMessages = 0
   
   def __init__(self):
     return
 
   def createInverterId(self):
-    self.inverterId = None
+    self.inverterId.clear()
     try:
       intserial = int(Parameters["Mode1"])
       cs = 115;  # offset, not found any explanation sofar for this offset
@@ -71,7 +71,6 @@ class BasePlugin:
         cs = cs + 2 * bytesserial[idx]
 
       # build indentifier
-      self.inverterId = bytearray()
       self.inverterId.append(0x68)
       self.inverterId.append(0x02)
       self.inverterId.append(0x40)
@@ -121,34 +120,40 @@ class BasePlugin:
     #self.checkConnection()
 
   def onStop(self):
-    Domoticz.Log("onStop called")
-    return
+    self.connection = None
+    self.connectionState = 0
+    # cleanup?
 
   def checkConnection(self, checkonly = False):
     # Check connection and connect none
     isConnected = False
+    
     if self.connection is None:
       self.connection = Domoticz.Connection(Name="Hosola_OmnikBinair", Transport="TCP/IP", Protocol="None", Address=Parameters["Address"], Port=Parameters["Port"])
     
-    if self.connection.Connected() == True:
+    if self.connectionState == 2:
       isConnected = True
     else:
-      if self.busyConnecting:
+      if self.connectionState == 1:
         isConnected = False
       else:
         if not checkonly:
           self.oustandingMessages = 0
-          self.busyConnecting = True
-          self.connection.Connect() # if failed (??) set self.busyConnecting back to false, create new conenction (??)
+          self.connectionState = 1
+          self.connection.Connect() # if failed (??) set self.connectionState back to false, create new conenction (??)
         isConnected = False
+
     return isConnected
+ 
       
   def onConnect(self, Connection, Status, Description):
-    self.busyConnecting = False
+    
     if (Status == 0):
+      self.connectionState = 2
       Domoticz.Log("Connected successfully to: "+Connection.Address+":"+Connection.Port)
       self.sendNullValues()
     else:
+      self.connectionState = 0
       Domoticz.Log("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description)
       # destroy connection and create a new one
       self.connection = None
@@ -201,11 +206,11 @@ class BasePlugin:
             UpdateDevice(unt, pac[i], self.totalEnergy)
         
         UpdateDevice(1, temperature)
-        self.readBytes = bytearray()
+        self.readBytes.clear()
         
       else:
         Domoticz.Error("Incorrect messsage: "+createByteString(self.readBytes))
-        self.readBytes = bytearray()
+        self.readBytes.clear()
       
 
   def onCommand(self, Unit, Command, Level, Hue):
@@ -217,7 +222,7 @@ class BasePlugin:
     return
 
   def onDisconnect(self, Connection):
-    # self.busyConnecting = False Should not be needed
+    self.connectionState = 0
     Domoticz.Log("Disconnected from: "+Connection.Address+":"+Connection.Port)
     self.connection = None # reset connection
     return
@@ -241,11 +246,11 @@ class BasePlugin:
         self.sendNullValues()
         self.connection.Disconnect()
       else:
-        if self.inverterId is not None: # Only send message if inverter id is known
+        if len(self.inverterId) > 4: # Only send message if inverter id is known
           self.oustandingMessages = self.oustandingMessages + 1
           if (len(self.readBytes) > 0):
             Domoticz.Error("Erased (send new request): "+createByteString(self.readBytes))
-            self.readBytes = bytearray()  # clear all bytes read
+            self.readBytes.clear()  # clear all bytes read
           self.connection.Send(self.inverterId)
 
 
