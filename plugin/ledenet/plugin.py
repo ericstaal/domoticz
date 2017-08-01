@@ -394,11 +394,11 @@ class BasePlugin:
     # sunrise from domoticz... But I don't know how to retrieve it....
     
     try:
-      domoticzurl = 'http://127.0.0.1:8080/json.htm?type=command&param=getSunRiseSet'
+      domoticzurl = 'https://127.0.0.1:8443/json.htm?type=command&param=getSunRiseSet'
       encoding = 'utf-8'
       
       inlog = '%s:%s' % (self.domoticzusername, self.domoticzpassword) 
-      base64string = b64encode(inlog.encode(encoding)).decode(encoding)
+      base64string = base64.b64encode(inlog.encode(encoding)).decode(encoding)
       request = urllib.request.Request(domoticzurl)
       request.add_header("Authorization", "Basic %s" % base64string)
       response = urllib.request.urlopen(request)
@@ -425,7 +425,7 @@ class BasePlugin:
     
     # Fill datatset
     marginLight = int(Parameters["Mode4"])
-    endtimeLight = StringToMinutes(Parameters["Mode1"])
+    endtimeLight = self.StringToMinutes(Parameters["Mode1"])
     minTimeColor = int(Parameters["Mode2"])
     maxTimeColor = int(Parameters["Mode3"])
     
