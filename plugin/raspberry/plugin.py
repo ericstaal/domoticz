@@ -1,6 +1,6 @@
-# WOL ping plugin. 
+# Raspberry Pi Disk Usage
 #
-# Description: Pings host and activates it via WOL
+# Description: Reports temperature and free disk space
 #
 # Author: elgringo
 #
@@ -9,18 +9,21 @@
 # 1.0.1   31-07-2017  Updated with new API
 
 """
-<plugin key="WOLping" name="WOL/Pinger" author="elgringo" version="1.0.1" externallink="https://github.com/ericstaal/domoticz/blob/master/">
+<plugin key="RaspberryInfo" name="System Status" author="elgringo" version="1.0.1" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
-    <param field="Address" label="IP address" width="200px" required="true" default="127.0.0.1"/>
-    <param field="Mode1" label="MAC adress" width="200px" required="false"/>
-    <param field="Port" label="Port" width="30px" required="false" default="7"/>
-    <param field="Mode2" label="Interval" width="50px" required="true" default="10" /> 
-    <param field="Mode3" label="Max missed" width="50px" required="true" default="1" /> 
-    <param field="Mode4" label="File location" width="200px" required="true" default="/tmp/" /> 
-    <param field="Mode5" label="Mode" width="75px">
+    <param field="Mode1" label="Size" width="50px" required="true">
       <options>
-        <option label="ping" value="ping" default="true"/>
-        <option label="arping" value="arping" />
+        <option label="Kb" value="Kb" />
+        <option label="Mb" value="Mb" />
+        <option label="Gb" value="Gb" default="true"/>
+      </options>
+    </param>
+    <param field="Mode2" label="Heartbeat interval" width="50px" required="true">
+      <options>
+        <option label="20" value="10" />
+        <option label="20" value="20" />
+        <option label="30" value="30" />
+        <option label="60" value="60" default="true"/>
       </options>
     </param>
     <param field="Mode6" label="Debug level" width="150px">
@@ -44,48 +47,15 @@
 
 import Domoticz
 import collections 
-import binascii
 import base64
+import binascii
 
 # additional imports
-import re
 import os
-import socket
-import struct
-import subprocess
-import xml.etree.ElementTree as etree
 
 class BasePlugin:
-  
-  connection = None           # Network connection
-  outstandingMessages = 0     # Open messages without reply
-  maxOutstandingMessages = 1  # lose conenction after
   logLevel = 0                # logLevel
-  
-  regexMac = re.compile('^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$')
-  regexOnline = re.compile('1 packets transmitted, 1 (packets |)received')
-  regexIp = re.compile('^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$')
-  ip = None
-  mac = None
-  tempFile = None
-  wolport = 7
-  arping = True
-  lastState = False
-  
-  def checkConnection(self, checkonly = False):
-    # Check connection and connect none
-    isConnected = False
-    
-    if not self.connection is None:
-      if self.connection.Connected():
-        isConnected = True
-      else:
-        if (not self.connection.Connecting()) and (not checkonly):
-          self.outstandingMessages = 0
-          self.connection.Connect()
-    
-    return isConnected
-    
+ 
   def onStart(self):
     try:
       self.logLevel = int(Parameters["Mode6"])
@@ -96,45 +66,13 @@ class BasePlugin:
       Domoticz.Debugging(1)
     self.LogMessage("onStart called", 9)
     
-    # self.connection = ...
-    if (self.regexMac.match(Parameters["Mode1"] )):
-      self.mac = Parameters["Mode1"]
-      # replace separators
-      if len(self.mac) == 12 + 5:
-        sep = self.mac[2]
-        self.mac = self.mac.replace(sep, '')
-        
-    if (self.regexIp.match(Parameters["Address"] )):
-      self.ip = Parameters["Address"]
-    else:
-      self.LogError("'"+Parameters["Address"]+"' is not a valid IP adress." )
-    
-    self.arping = (Parameters["Mode5"] == "arping")
-    self.tempFile = Parameters["Mode4"] + "ping_"+Parameters["Address"]
-    self.LogMessage( "Temp file: " + self.tempFile, 1)
-    try:
-      self.wolport = int(Parameters["Port"])
-    except Exception as e:
-      self.LogError("Port is not a number: "+ Parameters["Port"])
-    try:
-      self.maxOutstandingMessages = int(Parameters["Mode3"])
-    except Exception as e:
-      self.LogError("Max missed is not a number: "+ Parameters["Mode3"])
-    try: 
-      Domoticz.Heartbeat(int(Parameters["Mode2"]))
-    except:
-      pass
+    Domoticz.Heartbeat(int(Parameters["Mode2"]))
       
-    # initial cleanup
-    if (os.path.isfile(self.tempFile)):
-      subprocess.call('sudo chmod +wr '+ self.tempFile , shell=True)
-      os.remove(self.tempFile)
-         
-    # create a switch
     if (len(Devices) == 0):
-      Domoticz.Device(Name="Device", Unit=1, TypeName="Switch").Create()
-    
-    self.lastState = Devices[1].nValue != 0
+      Domoticz.Device(Name="Free space", Unit=1, TypeName="Custom", Image=3, Options={"Custom": ("1;" + Parameters["Mode1"])}).Create()
+      Domoticz.Device(Name="Temperature", Unit=2, Type=80, Subtype=5, Switchtype=0, Image=0).Create()
+    elif 1 in Devices:
+      Devices[1].Update(0, "0", Options={"Custom": ("1;" + Parameters["Mode1"])})
       
     self.DumpConfigToLog()
     
@@ -158,10 +96,6 @@ class BasePlugin:
   def onCommand(self, Unit, Command, Level, Hue):
     self.LogMessage("onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level)+", Hue: " + str(Hue), 8)
     
-    if ( str(Command) == "On"):
-      # send WOL
-      self.sendWOL()
-        
     return
 
   def onNotification(self, Name, Subject, Text, Status, Priority, Sound, ImageFile):
@@ -175,65 +109,37 @@ class BasePlugin:
     return
 
   def onHeartbeat(self):
-    self.LogMessage("onHeartbeat called, open messages: " + str(self.outstandingMessages), 9)
-    
-    if (os.path.isfile(self.tempFile)):
-      online = False
-      try:
+    self.LogMessage("onHeartbeat called", 9)
+    try:
+      # size
+      data = os.popen("df -k | grep -vE '^Filesystem|tmpfs|cdrom' | awk '{ print $6 \" \" $4 }'").read()
+      # / 1.5g
+      # /boot ...
+      for line in data.split("\n"):
+        koloms = line.split(' ')
+        if koloms[0] == '/':
+          size = float(koloms[1])
+          
+          if Parameters["Mode1"] == "Gb":
+            size = size / 1048576
+          elif Parameters["Mode1"] == "Mb":
+            size = size / 1024
+          
+          self.UpdateDevice(1, 0, round(size,1))
+          break 
       
-        # check current status
-        subprocess.call('sudo chmod +wr '+ self.tempFile , shell=True)
-          
-        file = open(self.tempFile)
-        text = file.read()
-        file.close()
+      # temperature
+      data = os.popen("cat /sys/class/thermal/thermal_zone0/temp").read()    
+      temp = round(int(data) / 1000,1)
+      self.UpdateDevice(2, 0, temp)
         
-        online = len(self.regexOnline.findall(text)) > 0
-        self.LogMessage("Is device online: "+ str(online), 6)
-        os.remove(self.tempFile)
-      except Exception as e:
-        self.LogError("Failed reading '"+self.tempFile+"' : "+ str(e))
-        
-      if online: # device is online
-        if not self.lastState: # last state was offline
-          self.outstandingMessages = 0 # reset miss counter
-          Devices[1].Update( 1, "On") # update
-          self.lastState = True 
-      else:
-        if self.lastState:
-          self.outstandingMessages = self.outstandingMessages + 1
-          if self.outstandingMessages > self.maxOutstandingMessages:
-            Devices[1].Update( 0, "Off")
-            self.lastState = False
-          
-    if self.arping:
-      #ARPING
-      command = 'sudo arping -c1 -W 1 '+ self.ip  + ' > '+self.tempFile+' &'
-    else:
-      #PING
-      command = 'ping -c 1 -n -s 1 -q '+ self.ip  + ' > '+self.tempFile+' &'
-    subprocess.call(command , shell=True)
-    self.LogMessage(command, 9)
+    except Exception as e:
+      self.LogError("OnHeartbeat Error: "+ str(e))
       
     return
 
-####################### Specific helper functions for plugin #######################    
-  def sendWOL(self):
-    # only if WOL exists
-    if not (self.mac is None):
-      self.LogMessage("Send WOL to MAC: "+ self.mac, 3)
-      data = b'FFFFFFFFFFFF' + (self.mac * 20).encode()
-      send_data = b'' 
+####################### Specific helper functions for plugin #######################  
 
-      # Split up the hex values and pack.
-      for i in range(0, len(data), 2):
-        send_data += struct.pack('B', int(data[i: i + 2], 16))
-
-      # Broadcast it to the LAN.
-      sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-      sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-      sock.sendto(send_data, ('255.255.255.255', self.wolport))
-    
 ####################### Generic helper member functions for plugin ####################### 
   def StringToMinutes(self, value):
     # hh:mm
@@ -337,7 +243,7 @@ class BasePlugin:
     return base64.b64encode(s.encode('utf-8')).decode("utf-8")
 
   def base64ToString(self, b):
-    return base64.b64decode(b).decode('utf-8')  
+    return base64.b64decode(b).decode('utf-8')    
     
 ####################### Global functions for plugin #######################
 global _plugin

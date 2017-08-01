@@ -1,21 +1,19 @@
+# Marantz pluging
 #
-#     Denon & Marantz AVR plugin
-#
-#     Author:   Dnpwwo, 2016 - 2017, Artemgy 2017, elgringo 2017
-#
+# Description: 
 #   Mode3 ("Sources") needs to have '|' delimited names of sources that the Denon knows about.  
 #   The Selector can be changed afterwards to any text and the plugin will still map to the actual Denon name.
-#   
-#   Adjust for marantz sr5009: removed pwer (controlled via zone), added tuner preset +/- buttons with stationname
 #
+#   Adjust for marantz sr5009: removed power (controlled via zone), added tuner preset +/- buttons with stationname
+#
+# Author: Dnpwwo, 2016 - 2017, Artemgy 2017, elgringo 2017
+#
+# History:
+# 1.0.0   01-07-2017  Initial version
+# 2.6.0   31-07-2017  Updated with new API
+
 """
-<plugin key="DenonMarantz" version="2.5.6" name="Denon / Marantz AVR Amplifier" author="dnpwwo/artemgy/elgringo" externallink="https://github.com/ericstaal/domoticz/blob/master/plugin/marantz">
-  <description>
-Denon & Marantz AVR plugin.<br/><br/>
-&quot;Sources&quot; need to have '|' delimited names of sources that the Denon knows about from the technical manual.<br/>
-The Sources Selector(s) can be changed after initial creation to any text and the plugin will still map to the actual Denon name.<br/><br/>
-Devices will be created in the Devices Tab only and will need to be manually made active.
-  </description>
+<plugin key="DenonMarantz" name="Denon / Marantz AVR Amplifier" author="dnpwwo/artemgy/elgringo" version="2.6.0" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
     <param field="Address" label="IP Address" width="200px" required="true" default="127.0.0.1"/>
     <param field="Port" label="Port" width="30px" required="true" default="23"/>
@@ -31,26 +29,41 @@ Devices will be created in the Devices Tab only and will need to be manually mad
       </options>
     </param>
     <param field="Mode3" label="Sources" width="550px" required="true" default="Off|DVD|VDP|TV|CD|DBS|Tuner|Phono|VCR-1|VCR-2|V.Aux|CDR/Tape|AuxNet|AuxIPod"/>
-    <param field="Mode6" label="Debug" width="75px">
+    
+    <param field="Mode6" label="Debug level" width="150px">
       <options>
-        <option label="True" value="Debug"/>
-        <option label="False" value="Normal"  default="true" />
+        <option label="0 (No logging)" value="0" default="true"/>
+        <option label="1" value="1"/> 
+        <option label="2" value="2"/>
+        <option label="3" value="3"/>
+        <option label="4" value="4"/>
+        <option label="5" value="5"/>
+        <option label="6" value="6"/>
+        <option label="7" value="7"/>
+        <option label="8" value="8"/>
+        <option label="9 (all)" value="9"/>
+        <option label="10 (all with debug)" value="10"/>
       </options>
     </param>
   </params>
 </plugin>
 """
+
 import Domoticz
+import collections 
 import base64
+import binascii
+
+# additional imports
 import datetime
 
 class BasePlugin:
-  connection = None
-  busyConnecting = False
   
-  oustandingPings = 0
-  #powerOn = False
-
+  connection = None           # Network connection
+  outstandingMessages = 0     # Open messages without reply
+  maxOutstandingMessages = 5  # lose conenction after
+  logLevel = 0                # logLevel
+  
   mainOn = False
   mainSource = 0
   mainVolume1 = 0
@@ -58,8 +71,6 @@ class BasePlugin:
   
   ignoreMessages = "|SS|SV|SD|MS|PS|CV|SY|TP|"
   selectorMap = {}
-  #pollingDict =  {"PW":"ZM?\r", "ZM":"SI?\r", "SI":"MV?\r", "MV":"MU?\r", "MU":"PW?\r" }
-  #pollingDict =  {"ZM":"SI?\r", "SI":"MV?\r", "MV":"MU?\r", "MU":"ANNAME?\r", "TF":"ZM?\r"  }
   pollingDict =  {"ZM":"SI?\r", "SI":"MV?\r", "MV":"MU?\r", "MU":"ZM?\r" }
   lastMessage = "ZM"
   lastHeartbeat = datetime.datetime.now()
@@ -70,27 +81,28 @@ class BasePlugin:
     # Check connection and connect none
     isConnected = False
     
-    if self.connection is None:
-      self.connection = Domoticz.Connection(Name="Telnet", Transport="TCP/IP", Protocol="Line", Address=Parameters["Address"], Port=Parameters["Port"])
-      
-    if self.connection.Connected() == True:
-      isConnected = True
-    else:
-      if self.busyConnecting:
-        isConnected = False
+    if not self.connection is None:
+      if self.connection.Connected():
+        isConnected = True
       else:
-        if not checkonly:
-          self.oustandingPings = 0
-          self.busyConnecting = True
-          self.connection.Connect() # if failed (??) set self.busyConnecting back to false, create new conenction (??)
-        isConnected = False
-
+        if (not self.connection.Connecting()) and (not checkonly):
+          self.outstandingMessages = 0
+          self.connection.Connect()
+    
     return isConnected
-  
+    
   def onStart(self):
-    if Parameters["Mode6"] == "Debug":
+    try:
+      self.logLevel = int(Parameters["Mode6"])
+    except:
+      self.LogError("Debuglevel '"+Parameters["Mode6"]+"' is not an integer")
+      
+    if self.logLevel == 10:
       Domoticz.Debugging(1)
-
+    self.LogMessage("onStart called", 9)
+    
+    self.connection = Domoticz.Connection(Name="Telnet", Transport="TCP/IP", Protocol="Line", Address=Parameters["Address"], Port=Parameters["Port"])
+      
     self.SourceOptions = {'LevelActions': '|'*Parameters["Mode3"].count('|'),
                'LevelNames': Parameters["Mode3"],
                'LevelOffHidden': 'false',
@@ -113,64 +125,58 @@ class BasePlugin:
     if ("DenonMarantzIncrease" not in Images): Domoticz.Image('DenonMarantzIncrease.zip').Create()
     if ("DenonMarantzDecrease" not in Images): Domoticz.Image('DenonMarantzDecrease.zip').Create()
     if ("DenonMarantzboombox" not in Images): Domoticz.Image('DenonMarantzboombox.zip').Create()
-    
-    
+        
     if (4 in Devices):
       Devices[4].Update(nValue=Devices[4].nValue, sValue=str(Devices[4].sValue), Image=Images["DenonMarantzIncrease"].ID)
     if (5 in Devices):
       Devices[5].Update(nValue=Devices[5].nValue, sValue=str(Devices[5].sValue), Image=Images["DenonMarantzDecrease"].ID)
     if (6 in Devices):
       Devices[6].Update(nValue=Devices[5].nValue, sValue=str(Devices[6].sValue), Image=Images["DenonMarantzboombox"].ID)      
- 
-    
-    DumpConfigToLog()
+     
     dictValue=0
     for item in Parameters["Mode3"].split('|'):
       self.selectorMap[dictValue] = item
       dictValue = dictValue + 10
+      
+    self.DumpConfigToLog()
     
-    #self.checkConnection()
+    return
+
+  def onStop(self):
+    self.LogMessage("onStop called", 9)
+    
     return
 
   def onConnect(self, Connection, Status, Description):
-    self.busyConnecting = False
     if (Status == 0):
-      Domoticz.Log("Connected successfully to: "+Connection.Address+":"+Connection.Port)
-      #self.connection.Send('PW?\r')
-      #self.connection.Send('ZM?\r', Delay=1)
+      self.LogMessage("Connected successfully to: "+Connection.Address+":"+Connection.Port, 2)
       self.connection.Send('ZM?\r')
+      
     else:
-      #self.powerOn = False
-      Domoticz.Log("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description)
-      # destroy connection and create a new one
-      self.connection = None
+      self.LogMessage("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description, 2)
       self.SyncDevices()
+
     return
 
-  def onMessage(self, Connection, Data, Status, Extra):
-    self.oustandingPings = self.oustandingPings - 1
-    strData = Data.decode("utf-8", "ignore")
-    Domoticz.Debug("onMessage called with Data: '"+str(strData)+"'")
+  def onMessage(self, Connection, Data):
     
+    if (self.outstandingMessages >= 1):
+      self.outstandingMessages = self.outstandingMessages - 1
+      
+    strData = Data.decode("utf-8", "ignore")
+        
     strData = strData.strip()
+    self.LogMessage("onMessage called: "+strData , 9)
     action = strData[0:2]
     detail = strData[2:]
     if (action in self.pollingDict): self.lastMessage = action
 
-    
-    #if (action == "PW"):    # Power Status
-    #  if (detail == "STANDBY"):
-    #    self.powerOn = False
-    #  elif (detail == "ON"):
-    #    self.powerOn = True
-    #  else: Domoticz.Debug("Unknown: Action "+action+", Detail '"+detail+"' ignored.")
-    #elif (action == "ZM"):    # Main Zone on/off
     if (action == "ZM"):    # Main Zone on/off
       if (detail == "ON"):
         self.mainOn = True
       elif (detail == "OFF"):
         self.mainOn = False
-      else: Domoticz.Debug("Unknown: Action "+action+", Detail '"+detail+"' ignored.")
+      else: LogMessage("Unknown: Action "+action+", Detail '"+detail+"' ignored.", 5)
     elif (action == "SI"):    # Main Zone Source Input
       for key, value in self.selectorMap.items():
         if (detail == value):    
@@ -180,38 +186,34 @@ class BasePlugin:
       if (detail.isdigit()):
         if (abs(self.mainVolume1) != int(detail[0:2])): self.mainVolume1 = int(detail[0:2])
       elif (detail[0:3] == "MAX"): Domoticz.Debug("Unknown: Action "+action+", Detail '"+detail+"' ignored.")
-      else: Domoticz.Log("Unknown: Action "+action+", Detail '"+detail+"' ignored.")
+      else: LogMessage("Unknown: Action "+action+", Detail '"+detail+"' ignored.", 5)
     elif (action == "MU"):    # Overall Mute
       if (detail == "ON"):     self.mainVolume1 = abs(self.mainVolume1)*-1
       elif (detail == "OFF"):    self.mainVolume1 = abs(self.mainVolume1)
-      else: Domoticz.Debug("Unknown: Action "+action+", Detail '"+detail+"' ignored.")
+      else: LogMessage("Unknown: Action "+action+", Detail '"+detail+"' ignored.", 5)
     elif (action == "TF"):
       self.stationName = detail[6:].strip()
       
     else:
       if (self.ignoreMessages.find(action) < 0):
-        Domoticz.Debug("Unknown message '"+action+"' ignored.")
+        self.LogMessage("Unknown message '"+action+"' ignored.", 1)
     self.SyncDevices()
-    
+
     return
 
   def onCommand(self, Unit, Command, Level, Hue):
-    Domoticz.Log("onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level))
-
+    self.LogMessage("onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level)+", Hue: " + str(Hue), 8)
+    
     Command = Command.strip()
     action, sep, params = Command.partition(' ')
     action = action.capitalize()
     params = params.capitalize()
     delay = 0
     
-    #if (self.powerOn == False):
-    #  delay = int(Parameters["Mode2"])
-    #else:
-    #  # Amp will ignore commands if it is responding to a heartbeat so delay send
     lastHeartbeatDelta = (datetime.datetime.now()-self.lastHeartbeat).total_seconds()
     if (lastHeartbeatDelta < 0.5):
       delay = 1
-      Domoticz.Log("Last heartbeat was "+str(lastHeartbeatDelta)+" seconds ago, delaying command send.")
+      self.LogMessage("Last heartbeat was "+str(lastHeartbeatDelta)+" seconds ago, delaying command send.", 4)
 
     # Main Zone devices
     if self.checkConnection(True):
@@ -231,42 +233,154 @@ class BasePlugin:
           self.connection.Send(Message='MUON\r', Delay=delay)
       elif (Unit == 4):   # Up
         self.connection.Send(Message='TPANUP\r', Delay=delay)
-        #self.lastMessage = "MU" # force reloading channel name
       elif (Unit == 5):   # Down
         self.connection.Send(Message='TPANDOWN\r', Delay=delay)
-        #self.lastMessage = "MU" # force reloading channel name
+    return
+
+  def onNotification(self, Name, Subject, Text, Status, Priority, Sound, ImageFile):
+    self.LogMessage("onNotification: " + Name + "," + Subject + "," + Text + "," + Status + "," + str(Priority) + "," + Sound + "," + ImageFile, 8)
+    
     return
 
   def onDisconnect(self, Connection):
-    Domoticz.Log("Denon device has disconnected.")
-    # self.busyConnecting = False Should not be needed
-    self.connection = None # reset connection
+    self.LogMessage("onDisconnect "+Connection.Address+":"+Connection.Port, 7)
+
     return
 
   def onHeartbeat(self):
+    self.LogMessage("onHeartbeat called, open messages: " + str(self.outstandingMessages), 9)
     if self.checkConnection(): # if false will initialize a new connection
-      if (self.oustandingPings > 5):
+      if (self.outstandingMessages > self.maxOutstandingMessages):
         self.connection.Disconnect()
       else:
+        # send message
         self.lastHeartbeat = datetime.datetime.now()
         self.connection.Send(self.pollingDict[self.lastMessage])
-        Domoticz.Debug("onHeartbeat: self.lastMessage "+self.lastMessage+", Sending '"+self.pollingDict[self.lastMessage][0:2]+"'.")
-        self.oustandingPings = self.oustandingPings + 1
+        self.LogMessage("onHeartbeat: lastMessage "+self.lastMessage+", Sending '"+self.pollingDict[self.lastMessage][0:2]+"' Open messages: "+str(self.maxOutstandingMessages)+". ", 8)
+        
+        self.outstandingMessages = self.outstandingMessages + 1
+      
     return
 
+####################### Specific helper functions for plugin #######################    
   def SyncDevices(self):
-    #if (self.powerOn == False):
-    #  UpdateDevice(2, 0, "0")
-    #  UpdateDevice(3, 0, str(abs(self.mainVolume1)))
-    #else:
-    UpdateDevice(2, self.mainSource if self.mainOn else 0, str(self.mainSource if self.mainOn else 0))
-    if (self.mainVolume1 <= 0 or self.mainOn == False): UpdateDevice(3, 0, str(abs(self.mainVolume1)))
-    else: UpdateDevice(3, 2, str(self.mainVolume1))
+    self.UpdateDevice(2, self.mainSource if self.mainOn else 0, str(self.mainSource if self.mainOn else 0))
+    if (self.mainVolume1 <= 0 or self.mainOn == False): self.UpdateDevice(3, 0, str(abs(self.mainVolume1)))
+    else: self.UpdateDevice(3, 2, str(self.mainVolume1))
     
-    UpdateDevice(6,0,self.stationName)
+    if (len(self.stationName) == 0):
+      self.UpdateDevice(6,0,"?")
+    elif (not self.stationName.isdigit()):
+      self.UpdateDevice(6,0,self.stationName)
 
+    return  
+    
+####################### Generic helper member functions for plugin ####################### 
+  def StringToMinutes(self, value):
+    # hh:mm
+    splitted = value.split(":")
+    if len(splitted) >= 2:
+      minutes = int(splitted[len(splitted)-1]) + int(splitted[len(splitted)-2])*60
+    else:
+      minutes = int(splitted[0])
+    return minutes  
+   
+  def UpdateDevice(self, Unit, nValue, sValue1, sValue2 = None):
+    # Make sure that the Domoticz device still exists (they can be deleted) before updating it 
+    if (Unit in Devices):
+      if sValue2 is None:
+        sValue = str(sValue1)
+      else:
+        sValue = str(sValue1)+";"+str(sValue2)
+        
+      if (Devices[Unit].nValue != nValue) or (Devices[Unit].sValue != sValue):
+        self.LogMessage("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+",'"+str(Devices[Unit].sValue )+"') to: ("+str(nValue)+":'"+str(sValue)+"')", 5)
+        Devices[Unit].Update(nValue, sValue)
+    return
+   
+  def DumpDeviceToLog(self,Unit):
+    self.LogMessage(str(Devices[Unit].ID)+":"+Devices[Unit].Name+", (n:"+str(Devices[Unit].nValue)+", s:"+Devices[Unit].sValue+", Sgl:"+str(Devices[Unit].SignalLevel)+", bl:"+str(Devices[Unit].BatteryLevel)+", img:"+ str(Devices[Unit].Image)+", typ:"+ str(Devices[Unit].Type)+", styp:"+ str(Devices[Unit].SubType)+")", 6)
+    return   
+    
+  def DumpConfigToLog(self):
+    for x in Parameters:
+      if Parameters[x] != "":
+        self.LogMessage( "'" + x + "':'" + str(Parameters[x]) + "'", 7)
+    self.LogMessage("Device count: " + str(len(Devices)), 6)
+    for x in Devices:
+      self.DumpDeviceToLog(x)
     return
     
+  def DumpVariable(self, Item, Varname, Level = 5, BytesAsStr = False, Prefix=""):
+    if self.logLevel >= Level:
+      Prefix = str(Prefix)
+      if isinstance(Item, dict):
+        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): ", Level)
+        
+        if len(Prefix) < 3:
+          Prefix = "--> "
+        else:
+          Prefix = "--" + Prefix
+          
+        for b in Item:
+          if isinstance(b, str):
+            self.DumpVariable( Item[b], "'"+str(b) + "'", Level, BytesAsStr, Prefix)
+          else:
+            self.DumpVariable( Item[b], str(b), Level, BytesAsStr, Prefix)
+         
+      elif isinstance(Item, (bytes, bytearray)):
+        if BytesAsStr:
+          txt = Item.decode("utf-8")
+        else:
+          txt = "[ " 
+          for b in Item:
+            txt += str(hex(b))+" "
+          txt +=  "]"
+        
+        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): " + txt, Level)
+      elif isinstance(Item, (tuple, list)):
+        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): ", Level)
+        
+        if len(Prefix) < 3:
+          Prefix = "--> "
+        else:
+          Prefix = "--" + Prefix
+          
+        idx = 0
+        for b in Item:
+          self.DumpVariable( b, "["+str(idx) + "]", Level, BytesAsStr, Prefix)
+          idx=idx+1
+
+      elif isinstance(Item, str):
+        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): '"+Item+"'", Level)
+      else:
+        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"): "+str(Item), Level)
+           
+    return
+
+  def LogMessage(self, Message, Level):
+    if Level > 0:
+      if self.logLevel >= Level:
+        if self.logLevel >= 10:
+          Domoticz.Debug(Message)
+        else:
+          Domoticz.Log(Message)
+    elif (Level < 0) or (Level > 10):
+      Domoticz.Error(Message)
+      
+    return
+    
+  def LogError(self, Message):
+    self.LogMessage(Message, -1)
+    return  
+    
+  def stringToBase64(self, s):
+    return base64.b64encode(s.encode('utf-8')).decode("utf-8")
+
+  def base64ToString(self, b):
+    return base64.b64decode(b).decode('utf-8')  
+    
+####################### Global functions for plugin #######################
 global _plugin
 _plugin = BasePlugin()
 
@@ -274,17 +388,25 @@ def onStart():
   global _plugin
   _plugin.onStart()
 
+def onStop():
+  global _plugin
+  _plugin.onStop()
+
 def onConnect(Connection, Status, Description):
   global _plugin
   _plugin.onConnect(Connection, Status, Description)
 
-def onMessage(Connection, Data, Status, Extra):
+def onMessage(Connection, Data):
   global _plugin
-  _plugin.onMessage(Connection, Data, Status, Extra)
+  _plugin.onMessage(Connection, Data)
 
 def onCommand(Unit, Command, Level, Hue):
   global _plugin
   _plugin.onCommand(Unit, Command, Level, Hue)
+
+def onNotification(Name, Subject, Text, Status, Priority, Sound, ImageFile):
+  global _plugin
+  _plugin.onNotification(Name, Subject, Text, Status, Priority, Sound, ImageFile)
 
 def onDisconnect(Connection):
   global _plugin
@@ -294,31 +416,3 @@ def onHeartbeat():
   global _plugin
   _plugin.onHeartbeat()
 
-def UpdateDevice(Unit, nValue, sValue):
-  # Make sure that the Domoticz device still exists (they can be deleted) before updating it 
-  if (Unit in Devices):
-    if (Devices[Unit].nValue != nValue) or (Devices[Unit].sValue != sValue):
-      Devices[Unit].Update(nValue, str(sValue))
-      Domoticz.Log("Update "+str(nValue)+":'"+str(sValue)+"' ("+Devices[Unit].Name+")")
-  return
-
-def DumpConfigToLog():
-  for x in Parameters:
-    if Parameters[x] != "":
-      Domoticz.Debug( "'" + x + "':'" + str(Parameters[x]) + "'")
-  Domoticz.Debug("Device count: " + str(len(Devices)))
-  for x in Devices:
-    Domoticz.Debug("Device:       " + str(x) + " - " + str(Devices[x]))
-    Domoticz.Debug("Internal ID:   '" + str(Devices[x].ID) + "'")
-    Domoticz.Debug("External ID:   '" + str(Devices[x].DeviceID) + "'")
-    Domoticz.Debug("Device Name:   '" + Devices[x].Name + "'")
-    Domoticz.Debug("Device nValue:  " + str(Devices[x].nValue))
-    Domoticz.Debug("Device sValue:   '" + Devices[x].sValue + "'")
-    Domoticz.Debug("Device LastLevel: " + str(Devices[x].LastLevel))
-  return
-
-def stringToBase64(s):
-  return base64.b64encode(s.encode('utf-8')).decode("utf-8")
-
-def base64ToString(b):
-  return base64.b64decode(b).decode('utf-8')

@@ -11,7 +11,7 @@ domoticzpassword = "pi"             # password
 
 mintimebetweenrings = 1             # in seconds (means bell is 2\X seconds blind after a press)
 logrings = True                     # logging to stdout
-minbuttonpressed = 20               # 0 = do no check, other time in milliseconds
+minbuttonpressed = 10               # 0 = do no check, other time in milliseconds
 maxbuttonpressed = 5000             # time (ms)to wait until button press is over (only used if minbuttonpressed > 0)
 
 

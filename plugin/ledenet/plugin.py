@@ -1,79 +1,94 @@
 # LEDENET
 #
-# Author: elgringo
-#
+# Description: 
 # All text / settings are in dutch, If you want it translated, feel free to do so :)
 # Plugin connects to Ledenet / UFOlight RGB(W) controller (https://www.amazon.com/LEDENET-Controller-Android-Smartphone-Control/dp/B00MDKOSN0)
 # It gives RGBW sliders, on/off switch and an 'autolight' feature.
 # autolight will switch the light on around sunset, and switches the color at a min/max time. 
 # debug mode enables faster autolight switching, and more logging
+#
+# Author: elgringo
+#
+# History:
+# 1.0.0   01-07-2017  Initial version
+# 1.0.2   31-07-2017  Updated with new API
 
 """
-<plugin key="Ledenet" name="LedeNet" author="elgringo" version="1.0.1">
+<plugin key="Ledenet" name="LedeNet" author="elgringo" version="1.0.2" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
     <param field="Address" label="IP Address" width="200px" required="true" default="192.168.13.80"/>
     <param field="Port" label="Port" width="30px" required="true" default="5577"/>
-    
-    <param field="Mode1" label="Autolight light off" width="150px" required="true" default="22:45">
-    </param>
+    <param field="Mode1" label="Autolight light off" width="150px" required="true" default="22:45" />
     <param field="Mode2" label="Autolight minimal time same color (minutes)" width="150px" required="true">
-    <options>
-      <option label="5" value="5"/>
-      <option label="10" value="10"/>
-      <option label="20" value="20"/>
-      <option label="30" value="30" default="true"/>
-      <option label="45" value="45"/>
-    </options>
+      <options>
+        <option label="5" value="5"/>
+        <option label="10" value="10"/>
+        <option label="20" value="20"/>
+        <option label="30" value="30" default="true"/>
+        <option label="45" value="45"/>
+      </options>
     </param>
     <param field="Mode3" label="Autolight maximal same color (minutes)" width="150px" required="true">
-    <options>
-      <option label="30" value="30"/>
-      <option label="45" value="45"/>
-      <option label="60" value="60" default="true"/>
-      <option label="75" value="75"/>
-      <option label="90" value="90"/>
-      <option label="120" value="120"/>
-      <option label="240" value="240"/>
-      <option label="300" value="300"/>
-    </options>
+      <options>
+        <option label="30" value="30"/>
+        <option label="45" value="45"/>
+        <option label="60" value="60" default="true"/>
+        <option label="75" value="75"/>
+        <option label="90" value="90"/>
+        <option label="120" value="120"/>
+        <option label="240" value="240"/>
+        <option label="300" value="300"/>
+      </options>
     </param>
     <param field="Mode4" label="Autolight margin (minutes)" width="150px" required="true">
-    <options>
-      <option label="5" value="5"/>
-      <option label="10" value="10"/>
-      <option label="15" value="15" default="true" />
-      <option label="20" value="20"/>
-      <option label="25" value="25"/>
-      <option label="30" value="30"/>
-    </options>
-    </param>
-    <param field="Mode6" label="Debug" width="75px">
       <options>
-        <option label="True" value="Debug"/>
-        <option label="False" value="Normal"  default="true" />
+        <option label="5" value="5"/>
+        <option label="10" value="10"/>
+        <option label="15" value="15" default="true" />
+        <option label="20" value="20"/>
+        <option label="25" value="25"/>
+        <option label="30" value="30"/>
+      </options>
+    </param>
+    
+    <param field="Mode6" label="Debug level" width="150px">
+      <options>
+        <option label="0 (No logging)" value="0" default="true"/>
+        <option label="1" value="1"/> 
+        <option label="2" value="2"/>
+        <option label="3" value="3"/>
+        <option label="4" value="4"/>
+        <option label="5" value="5"/>
+        <option label="6" value="6"/>
+        <option label="7" value="7"/>
+        <option label="8" value="8"/>
+        <option label="9 (all)" value="9"/>
+        <option label="10 (all with debug)" value="10"/>
       </options>
     </param>
   </params>
 </plugin>
 """
+
 import Domoticz
+import collections 
+import base64
+import binascii
 
-import collections  # dictionay
-import binascii     # printing data message
-
+# additional imports
 from datetime import datetime, timedelta
 import time
 import random
 import urllib.request 
 import json
-from base64 import b64encode
-
 
 class BasePlugin:
-  connection = None
-  connectionState = 0 # 0 = disconnect, 1= connecting 2 = connect
   
-  # some messages
+  connection = None           # Network connection
+  outstandingMessages = 0     # Open messages without reply
+  maxOutstandingMessages = 2  # lose conenction after
+  logLevel = 0                # logLevel
+  
   commandOn = b'\x71\x23\x0F\xA3'
   commandOff = b'\x71\x24\x0F\xA4'
   commandStatus = b'\x81\x8A\x8B\x96'
@@ -87,42 +102,41 @@ class BasePlugin:
   autolight = False         # if the autolight mode is enabled
   autolightDataset = dict() # dictionary with datimetime / functionpointer
   mustSendUpdate = False    # if the domotica values has been changed but not yet updated to the ledenet (connection problems)
-  openStatusRequest = 0     # noff send status request without answer
+  mustForceOff = False      # If autolight is enabled, light is on an no sunset on startup
   
   domoticzusername = "user"   # needed to get sunset times
   domoticzpassword = "pwd"
-      
-  def __init__(self):
-    return
-
+  
   def checkConnection(self, checkonly = False):
     # Check connection and connect none
     isConnected = False
     
-    if self.connection is None:
-      self.connection = Domoticz.Connection(Name="LedenetBinair", Transport="TCP/IP", Protocol="None", Address=Parameters["Address"], Port=Parameters["Port"])
-      
-    if self.connectionState == 2:
-      isConnected = True
-    else:
-      if self.connectionState == 1:
-        isConnected = False
+    if not self.connection is None:
+      if self.connection.Connected():
+        isConnected = True
       else:
-        if not checkonly:
-          self.openStatusRequest = 0
-          self.connectionState = 1
-          self.connection.Connect() # if failed (??) set self.connectionState back to false, create new connection (??)
-        isConnected = False
-
+        if (not self.connection.Connecting()) and (not checkonly):
+          self.outstandingMessages = 0
+          self.connection.Connect()
+    
     return isConnected
-  
+    
   def onStart(self):
-    # Read setting. if not debug mode heart is reduces to 20 sec
-    if Parameters["Mode6"] == "Debug":
+    try:
+      self.logLevel = int(Parameters["Mode6"])
+    except:
+      self.LogError("Debuglevel '"+Parameters["Mode6"]+"' is not an integer")
+      
+    if self.logLevel == 10:
       Domoticz.Debugging(1)
     else:
       Domoticz.Heartbeat(20)
-   
+      
+    self.LogMessage("onStart called", 9)
+    
+    
+    self.connection = Domoticz.Connection(Name="LedenetBinair", Transport="TCP/IP", Protocol="None", Address=Parameters["Address"], Port=Parameters["Port"])
+      
     if (len(Devices) == 0):
       # 241 = limitless, subtype 2= RGB/ 1= RGBW, switchtype 7 = philip
       Domoticz.Device(Name="Red",       Unit=1, Type=244, Subtype=73, Switchtype=7).Create()
@@ -156,7 +170,13 @@ class BasePlugin:
  
     # autolight is not saves in the devices itself
     self.autolight = Devices[5].nValue != 0
-    
+    if self.autolight:
+      now = datetime.now()
+      sunset = self.volgendeZonondergang()
+      if sunset > now:
+        self.LogMessage("Autolight enabled, while no sunset yet ("+str(sunset)+"). Disable LED after connected", 1 )
+        self.mustForceOff = True
+            
     # set default values:
     self.currentStatus[0] = False
     for i in range(1,5):
@@ -167,34 +187,36 @@ class BasePlugin:
       self.currentStatus[i] = self.uiToRGB(self.dimmerValues[i])
       
       
-    Domoticz.Log("Started current status: " + str(self.currentStatus) + " dimmer values: " + str(self.dimmerValues) )
-    # Connect 
-    #self.checkConnection()
-  
-  def onConnect(self, Connection, Status, Description):
+    self.LogMessage("Started current status: " + str(self.currentStatus) + " dimmer values: " + str(self.dimmerValues), 2 )
     
-    if (Status == 0):
-      self.connectionState = 2
-      Domoticz.Log("Connected successfully to: "+Connection.Address+":"+Connection.Port)
-    else:
-      self.connectionState = 0
-      Domoticz.Log("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description)
-      # destroy connection and create a new one
-      self.connection = None
-      self.updateDevices()
+    self.DumpConfigToLog()
+    
     return
 
-  def onDisconnect(self, Connection):
-    Domoticz.Log("Device has disconnected: "+Connection.Address+":"+Connection.Port+" missed "+str(self.openStatusRequest) + " status requests")
-    self.connectionState = 0
-    self.connection = None # reset connection
+  def onStop(self):
+    self.LogMessage("onStop called", 9)
+    
     return
-        
-  def onMessage(self, Connection, Data, Status, Extra):
+
+  def onConnect(self, Connection, Status, Description):
+    if (Status == 0):
+      self.LogMessage("Connected successfully to: "+Connection.Address+":"+Connection.Port, 3)
+      if self.mustForceOff:
+        self.connection.Send(self.commandOff)
+        self.mustForceOff = False
+    else:
+      self.LogMessage("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description, 3)
+      self.updateDevices()
+
+    return
+
+  def onMessage(self, Connection, Data):
+    self.DumpVariable(Data, "OnMessage Data")
+
     # only listen to the status, all other are not needed
     if (Data[0]==0x81 and len(self.readata) == 0):
       self.readata.extend(Data)
-      self.openStatusRequest = self.openStatusRequest - 1
+      self.outstandingMessages = self.outstandingMessages - 1
     elif (len(self.readata) < 14):
       self.readata.extend(Data)
       
@@ -212,7 +234,7 @@ class BasePlugin:
           self.updateDevices()
           
           status =  "ON" if self.currentStatus[0] else "OFF"
-          Domoticz.Debug("LedeNet changed to (R,G,B,W):(%d,%d,%d,%d) => %s" %(self.currentStatus[1],self.currentStatus[2],self.currentStatus[3], self.currentStatus[4], status))
+          self.LogMessage("LedeNet changed to (R,G,B,W):(%d,%d,%d,%d) => %s" %(self.currentStatus[1],self.currentStatus[2],self.currentStatus[3], self.currentStatus[4], status), 6)
       else:
         self.skipStatus = False      
         
@@ -220,10 +242,9 @@ class BasePlugin:
     return
 
   def onCommand(self, Unit, Command, Level, Hue):
-    #receives a command, and if the values are different than the actual send an update
-    CommandStr = str(Command);
-    Domoticz.Debug("onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level))
-  
+    self.LogMessage("onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level)+", Hue: " + str(Hue), 8)
+    
+    CommandStr = str(Command)
     self.requestedStatus = self.currentStatus[:]
     # Calculate color and send update to devices
     if ( CommandStr == "Off"):
@@ -250,7 +271,52 @@ class BasePlugin:
     self.updateController()
     # update UI
     self.updateDevices()
-        
+    
+    return
+
+  def onNotification(self, Name, Subject, Text, Status, Priority, Sound, ImageFile):
+    self.LogMessage("onNotification: " + Name + "," + Subject + "," + Text + "," + Status + "," + str(Priority) + "," + Sound + "," + ImageFile, 8)
+    
+    return
+
+  def onDisconnect(self, Connection):
+    self.LogMessage("onDisconnect "+Connection.Address+":"+Connection.Port, 7)
+
+    return
+
+  def onHeartbeat(self):
+    self.LogMessage("onHeartbeat called, open messages: " + str(self.outstandingMessages), 9)
+    
+    if self.checkConnection():
+      uiUpdated = False
+      if self.autolight:
+        if (len(self.autolightDataset) == 0): 
+          self.generateAutolightData() # when empty create new dataset
+      
+        now = datetime.now()
+        sortedkeys = sorted(self.autolightDataset.keys())
+        key = sortedkeys[0]
+    
+        now = datetime.now()
+        if key <= now:
+          self.autolightDataset[key]()
+          del self.autolightDataset[key] 
+          uiUpdated = True
+      
+      if (not uiUpdated):
+        if (self.outstandingMessages > self.maxOutstandingMessages):
+          self.connection.Disconnect()
+        else:
+          if self.mustSendUpdate:
+            self.updateController()
+          else:
+            self.readata.clear()
+            self.connection.Send(self.commandStatus)
+            self.outstandingMessages = self.outstandingMessages + 1
+           
+    return
+
+####################### Specific helper functions for plugin #######################    
   def uiToRGB(self, val):
     # Converts [0-100] => [0-255]
     if (val >= 100):
@@ -272,7 +338,7 @@ class BasePlugin:
   def updateController(self): # send update from domtoicz to ledenet
     if self.checkConnection(True):
       updateColor = False
-      Domoticz.Debug("Current: " + str(self.currentStatus) + " requested: " + str(self.requestedStatus))
+      self.LogMessage("Current: " + str(self.currentStatus) + " requested: " + str(self.requestedStatus), 5)
   
       for i in range(1,5):
         if self.currentStatus[i] != self.requestedStatus[i]:
@@ -284,6 +350,7 @@ class BasePlugin:
         checksum = (self.requestedStatus[1] + self.requestedStatus[2] + self.requestedStatus[3] + 0x3F +(self.requestedStatus[4] - 0xFF)) % 0x100
         msg = bytes([0x31, self.requestedStatus[1], self.requestedStatus[2], self.requestedStatus[3], self.requestedStatus[4], 0x00, 0x0F, checksum])
         self.connection.Send(msg)
+        self.DumpVariable(msg, "Send message")
         self.skipStatus = True
       
       # update power
@@ -304,24 +371,24 @@ class BasePlugin:
   def updateDevices(self): # updates devices based on the curent values
     if ((Devices[6].nValue != 0) != self.currentStatus[0]):
       if (self.currentStatus[0]):
-        UpdateDevice(6,1,"On")
+        self.UpdateDevice(6,1,"On")
       else:
-        UpdateDevice(6,0,"Off")
+        self.UpdateDevice(6,0,"Off")
         
     if ((Devices[5].nValue != 0) != self.autolight):
       if (self.autolight):
-        UpdateDevice(5,1,"On")
+        self.UpdateDevice(5,1,"On")
       else:
-        UpdateDevice(5,0,"Off")        
+        self.UpdateDevice(5,0,"Off")        
     
     for i in range(1,5):
       val = self.rgbToUI(self.currentStatus[i]) 
       if (self.currentStatus[i] == 0):
-        UpdateDevice(i,0,str(self.dimmerValues[i]))
+        self.UpdateDevice(i,0,str(self.dimmerValues[i]))
       elif (val == 100):
-        UpdateDevice(i,1,str(val))
+        self.UpdateDevice(i,1,str(val))
       else:
-        UpdateDevice(i,2,str(val))
+        self.UpdateDevice(i,2,str(val))
  
   def volgendeZonondergang(self):
     # sunrise from domoticz... But I don't know how to retrieve it....
@@ -347,7 +414,7 @@ class BasePlugin:
         ret = ret + timedelta(days = 1) 
       return ret
     except Exception as e:
-      Domoticz.Log("Error retrieving Sunset: "+ str(e))
+      self.LogError("Error retrieving Sunset: "+ str(e))
       now = datetime.now()
       return datetime(now.year, now.month, now.day, 22, 0, 0)
 
@@ -358,7 +425,7 @@ class BasePlugin:
     
     # Fill datatset
     marginLight = int(Parameters["Mode4"])
-    endtimeLight = stringToMinutes(Parameters["Mode1"])
+    endtimeLight = StringToMinutes(Parameters["Mode1"])
     minTimeColor = int(Parameters["Mode2"])
     maxTimeColor = int(Parameters["Mode3"])
     
@@ -366,19 +433,19 @@ class BasePlugin:
     
     lightOn = self.volgendeZonondergang()
     # config loggen 
-    Domoticz.Log("Autolight data: margin(min) " + str(marginLight) + ", Endtime(min):" + str(endtimeLight) +" ("+str(timedelta(minutes = endtimeLight))+"), switchtime ["+str(minTimeColor)+","+str(maxTimeColor)+"], Suset:"+str(lightOn))
+    self.LogMessage("Autolight data: margin(min) " + str(marginLight) + ", Endtime(min):" + str(endtimeLight) +" ("+str(timedelta(minutes = endtimeLight))+"), switchtime ["+str(minTimeColor)+","+str(maxTimeColor)+"], Suset:"+str(lightOn), 2)
     margin = random.randint(0, marginLight) - (marginLight*3) / 4 # 1/4 after sunset 3/4 before sunset
     lightOn = lightOn + timedelta(minutes = margin)
     
     # create record
-    if Parameters["Mode6"] == "Debug":
+    if Parameters["Mode6"] == "10":
       lightOn = datetime.now()+ timedelta(seconds=10) # prevent waiting :)
       minTimeColor = 1 
       maxTimeColor = 3
       
     margin = random.randint(0, marginLight) - marginLight / 2 + endtimeLight
     lightOff = datetime(lightOn.year, lightOn.month, lightOn.day) + timedelta(minutes = margin)
-    if ((Parameters["Mode6"] == "Debug") or (lightOn > lightOff)):
+    if ((Parameters["Mode6"] == "10") or (lightOn > lightOff)):
       lightOff = lightOn+timedelta(minutes=10)
       
     self.addRecord(lightOn, self.lightOn)
@@ -399,7 +466,7 @@ class BasePlugin:
       date = date + delta
       break
     self.autolightDataset[date] = func
-    Domoticz.Log("Autolight: " + str(date) + ", " + func.__name__)
+    self.LogMessage("Autolight: " + str(date) + ", " + func.__name__, 3)
   
   def lightOn(self):
     self.lightRandomColor(False) 
@@ -451,101 +518,145 @@ class BasePlugin:
     if selfUpdate:
       self.updateController()
       self.updateDevices()
+
+####################### Generic helper member functions for plugin ####################### 
+  def StringToMinutes(self, value):
+    # hh:mm
+    splitted = value.split(":")
+    if len(splitted) >= 2:
+      minutes = int(splitted[len(splitted)-1]) + int(splitted[len(splitted)-2])*60
+    else:
+      minutes = int(splitted[0])
+    return minutes  
+   
+  def UpdateDevice(self, Unit, nValue, sValue1, sValue2 = None):
+    # Make sure that the Domoticz device still exists (they can be deleted) before updating it 
+    if (Unit in Devices):
+      if sValue2 is None:
+        sValue = str(sValue1)
+      else:
+        sValue = str(sValue1)+";"+str(sValue2)
+        
+      if (Devices[Unit].nValue != nValue) or (Devices[Unit].sValue != sValue):
+        self.LogMessage("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+",'"+str(Devices[Unit].sValue )+"') to: ("+str(nValue)+":'"+str(sValue)+"')", 5)
+        Devices[Unit].Update(nValue, sValue)
+    return
+   
+  def DumpDeviceToLog(self,Unit):
+    self.LogMessage(str(Devices[Unit].ID)+":"+Devices[Unit].Name+", (n:"+str(Devices[Unit].nValue)+", s:"+Devices[Unit].sValue+", Sgl:"+str(Devices[Unit].SignalLevel)+", bl:"+str(Devices[Unit].BatteryLevel)+", img:"+ str(Devices[Unit].Image)+", typ:"+ str(Devices[Unit].Type)+", styp:"+ str(Devices[Unit].SubType)+")", 6)
+    return   
     
-  def onStop(self):
-    self.connection = None
-    self.connectionState = 0
-    # cleanup?
+  def DumpConfigToLog(self):
+    for x in Parameters:
+      if Parameters[x] != "":
+        self.LogMessage( "'" + x + "':'" + str(Parameters[x]) + "'", 7)
+    self.LogMessage("Device count: " + str(len(Devices)), 6)
+    for x in Devices:
+      self.DumpDeviceToLog(x)
+    return
     
-  def onHeartbeat(self):
-  
-    if self.checkConnection():
-      uiUpdated = False
-      if self.autolight:
-        if (len(self.autolightDataset) == 0): 
-          self.generateAutolightData() # when empty create new dataset
-      
-        now = datetime.now()
-        sortedkeys = sorted(self.autolightDataset.keys())
-        key = sortedkeys[0]
-    
-        now = datetime.now()
-        if key <= now:
-          self.autolightDataset[key]()
-          del self.autolightDataset[key] 
-          uiUpdated = True
-      
-      if (not uiUpdated):
-        if (self.openStatusRequest > 2):
-          self.connection.Disconnect()
+  def DumpVariable(self, Item, Varname, Level = 5, BytesAsStr = False, Prefix=""):
+    if self.logLevel >= Level:
+      Prefix = str(Prefix)
+      if isinstance(Item, dict):
+        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): ", Level)
+        
+        if len(Prefix) < 3:
+          Prefix = "--> "
         else:
-          if self.mustSendUpdate:
-            self.updateController()
+          Prefix = "--" + Prefix
+          
+        for b in Item:
+          if isinstance(b, str):
+            self.DumpVariable( Item[b], "'"+str(b) + "'", Level, BytesAsStr, Prefix)
           else:
-            self.readata.clear()
-            self.connection.Send(self.commandStatus)
-            self.openStatusRequest = self.openStatusRequest + 1
+            self.DumpVariable( Item[b], str(b), Level, BytesAsStr, Prefix)
+         
+      elif isinstance(Item, (bytes, bytearray)):
+        if BytesAsStr:
+          txt = Item.decode("utf-8")
+        else:
+          txt = "[ " 
+          for b in Item:
+            txt += str(hex(b))+" "
+          txt +=  "]"
+        
+        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): " + txt, Level)
+      elif isinstance(Item, (tuple, list)):
+        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): ", Level)
+        
+        if len(Prefix) < 3:
+          Prefix = "--> "
+        else:
+          Prefix = "--" + Prefix
+          
+        idx = 0
+        for b in Item:
+          self.DumpVariable( b, "["+str(idx) + "]", Level, BytesAsStr, Prefix)
+          idx=idx+1
+
+      elif isinstance(Item, str):
+        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): '"+Item+"'", Level)
+      else:
+        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"): "+str(Item), Level)
            
-  
+    return
+
+  def LogMessage(self, Message, Level):
+    if Level > 0:
+      if self.logLevel >= Level:
+        if self.logLevel >= 10:
+          Domoticz.Debug(Message)
+        else:
+          Domoticz.Log(Message)
+    elif (Level < 0) or (Level > 10):
+      Domoticz.Error(Message)
+      
+    return
+    
+  def LogError(self, Message):
+    self.LogMessage(Message, -1)
+    return  
+    
+  def stringToBase64(self, s):
+    return base64.b64encode(s.encode('utf-8')).decode("utf-8")
+
+  def base64ToString(self, b):
+    return base64.b64decode(b).decode('utf-8')  
+      
+####################### Global functions for plugin #######################
 global _plugin
 _plugin = BasePlugin()
 
 def onStart():
-    global _plugin
-    _plugin.onStart()
+  global _plugin
+  _plugin.onStart()
 
 def onStop():
-    global _plugin
-    _plugin.onStop()
-    
-    
-def onConnect(Connection, Status, Description):
-    global _plugin
-    _plugin.onConnect(Connection, Status, Description)
+  global _plugin
+  _plugin.onStop()
 
-def onMessage(Connection, Data, Status, Extra):
-    global _plugin
-    _plugin.onMessage(Connection, Data, Status, Extra)
+def onConnect(Connection, Status, Description):
+  global _plugin
+  _plugin.onConnect(Connection, Status, Description)
+
+def onMessage(Connection, Data):
+  global _plugin
+  _plugin.onMessage(Connection, Data)
 
 def onCommand(Unit, Command, Level, Hue):
-    global _plugin
-    _plugin.onCommand(Unit, Command, Level, Hue)
+  global _plugin
+  _plugin.onCommand(Unit, Command, Level, Hue)
+
+def onNotification(Name, Subject, Text, Status, Priority, Sound, ImageFile):
+  global _plugin
+  _plugin.onNotification(Name, Subject, Text, Status, Priority, Sound, ImageFile)
 
 def onDisconnect(Connection):
-    global _plugin
-    _plugin.onDisconnect(Connection)
+  global _plugin
+  _plugin.onDisconnect(Connection)
 
 def onHeartbeat():
-    global _plugin
-    _plugin.onHeartbeat()
+  global _plugin
+  _plugin.onHeartbeat()
 
-# Generic helper functions
-def UpdateDevice(Unit, nValue, sValue):
-  # Make sure that the Domoticz device still exists (they can be deleted) before updating it 
-  if (Unit in Devices):
-    if (Devices[Unit].nValue != nValue) or (Devices[Unit].sValue != sValue):
-      Domoticz.Debug("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+",'"+str(Devices[Unit].sValue )+"') to: ("+str(nValue)+":'"+str(sValue)+"')")
-      Devices[Unit].Update(nValue, sValue)
-  return
-    
-def DumpDeviceToLog(x):
-  Domoticz.Debug(str(Devices[x].ID)+":"+Devices[x].Name+", (n:"+str(Devices[x].nValue)+", s:"+Devices[x].sValue+", Sgl:"+str(Devices[x].SignalLevel)+", bl:"+str(Devices[x].BatteryLevel)+", img:"+ str(Devices[x].Image)+", typ:"+ str(Devices[x].Type)+", styp:"+ str(Devices[x].SubType))
-  return    
-  
-def DumpConfigToLog():
-  for x in Parameters:
-    if Parameters[x] != "":
-      Domoticz.Debug( "'" + x + "':'" + str(Parameters[x]) + "'")
-  for x in Devices:
-    DumpDeviceToLog(x)
-    
-  return
-  
-def stringToMinutes(value):
-  # hh:mm
-  splitted = value.split(":")
-  if len(splitted) >= 2:
-    minutes = int(splitted[len(splitted)-1]) + int(splitted[len(splitted)-2])*60
-  else:
-    minutes = int(splitted[0])
-  return minutes  
