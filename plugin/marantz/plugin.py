@@ -11,9 +11,10 @@
 # History:
 # 1.0.0   01-07-2017  Initial version
 # 2.6.0   31-07-2017  Updated with new API
+# 2.6.1   06-08-2017  Added own surce names
 
 """
-<plugin key="DenonMarantz" name="Denon / Marantz AVR Amplifier" author="dnpwwo/artemgy/elgringo" version="2.6.0" externallink="https://github.com/ericstaal/domoticz/blob/master/">
+<plugin key="DenonMarantz" name="Denon / Marantz AVR Amplifier" author="dnpwwo/artemgy/elgringo" version="2.6.1" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
     <param field="Address" label="IP Address" width="200px" required="true" default="127.0.0.1"/>
     <param field="Port" label="Port" width="30px" required="true" default="23"/>
@@ -29,6 +30,7 @@
       </options>
     </param>
     <param field="Mode3" label="Sources" width="550px" required="true" default="Off|DVD|VDP|TV|CD|DBS|Tuner|Phono|VCR-1|VCR-2|V.Aux|CDR/Tape|AuxNet|AuxIPod"/>
+    <param field="Mode4" label="Sources name" width="550px" required="true" default="Off|DVD|VDP|TV|CD|DBS|Tuner|Phono|VCR-1|VCR-2|V.Aux|CDR/Tape|AuxNet|AuxIPod"/>
     
     <param field="Mode6" label="Debug level" width="150px">
       <options>
@@ -53,6 +55,7 @@ import Domoticz
 import collections 
 import base64
 import binascii
+import html
 
 # additional imports
 import datetime
@@ -102,41 +105,57 @@ class BasePlugin:
     self.LogMessage("onStart called", 9)
     
     self.connection = Domoticz.Connection(Name="Telnet", Transport="TCP/IP", Protocol="Line", Address=Parameters["Address"], Port=Parameters["Port"])
-      
-    self.SourceOptions = {'LevelActions': '|'*Parameters["Mode3"].count('|'),
-               'LevelNames': Parameters["Mode3"],
-               'LevelOffHidden': 'false',
-               'SelectorStyle': '1'}
-      
-    if (len(Devices) == 0):
-      Domoticz.Device(Name="Source",     Unit=2, TypeName="Selector Switch", Switchtype=18, Image=5, Options=self.SourceOptions).Create()
-      Domoticz.Device(Name="Volume",     Unit=3, Type=244, Subtype=73, Switchtype=7, Image=8).Create()
-      Domoticz.Device(Name="Tuner up",   Unit=4, TypeName="Switch").Create()
-      Domoticz.Device(Name="Tuner down", Unit=5, TypeName="Switch").Create()
-      Domoticz.Device(Name="Station",    Unit=6, Type=243, Subtype=19, Switchtype=0).Create()
-    else:
-      if (2 in Devices and (len(Devices[2].sValue) > 0)):
-        self.mainSource = int(Devices[2].sValue)
-        self.mainOn = (Devices[2].nValue != 0)
-      if (3 in Devices and (len(Devices[3].sValue) > 0)):
-        self.mainVolume1 = int(Devices[3].sValue) if (Devices[3].nValue != 0) else int(Devices[3].sValue)*-1
     
-    #ICONS
-    if ("DenonMarantzIncrease" not in Images): Domoticz.Image('DenonMarantzIncrease.zip').Create()
-    if ("DenonMarantzDecrease" not in Images): Domoticz.Image('DenonMarantzDecrease.zip').Create()
-    if ("DenonMarantzboombox" not in Images): Domoticz.Image('DenonMarantzboombox.zip').Create()
-        
-    if (4 in Devices):
-      Devices[4].Update(nValue=Devices[4].nValue, sValue=str(Devices[4].sValue), Image=Images["DenonMarantzIncrease"].ID)
-    if (5 in Devices):
-      Devices[5].Update(nValue=Devices[5].nValue, sValue=str(Devices[5].sValue), Image=Images["DenonMarantzDecrease"].ID)
-    if (6 in Devices):
-      Devices[6].Update(nValue=Devices[5].nValue, sValue=str(Devices[6].sValue), Image=Images["DenonMarantzboombox"].ID)      
-     
     dictValue=0
     for item in Parameters["Mode3"].split('|'):
       self.selectorMap[dictValue] = item
       dictValue = dictValue + 10
+        
+    if (Parameters["Mode3"].count('|') != Parameters["Mode4"].count('|')):
+      self.LogError("Sources ("+Parameters["Mode3"]+") and names ("+Parameters["Mode4"]+") do not match! Using only sources")
+      
+      self.SourceOptions = {'LevelActions': '|'*Parameters["Mode3"].count('|'),
+               'LevelNames': Parameters["Mode3"],
+               'LevelOffHidden': 'false',
+               'SelectorStyle': '1'}
+    else:
+      self.SourceOptions = {'LevelActions': '|'*Parameters["Mode4"].count('|'),
+               'LevelNames': Parameters["Mode4"],
+               'LevelOffHidden': 'false',
+               'SelectorStyle': '1'}
+      
+    #ICONS
+    if ("DenonMarantzIncrease" not in Images): Domoticz.Image('DenonMarantzIncrease.zip').Create()
+    if ("DenonMarantzDecrease" not in Images): Domoticz.Image('DenonMarantzDecrease.zip').Create()
+    if ("DenonMarantzboombox" not in Images): Domoticz.Image('DenonMarantzboombox.zip').Create()
+    
+    if (2 not in Devices): 
+      Domoticz.Device(Name="Source",     Unit=2, TypeName="Selector Switch", Switchtype=18, Image=5, Options=self.SourceOptions).Create()
+      if (len(Devices[2].sValue) > 0):
+        self.mainSource = int(Devices[2].sValue)
+        self.mainOn = (Devices[2].nValue != 0)
+    elif (Devices[2].Options != self.SourceOptions):
+      self.LogMessage("Sources or names have changed.", Level = 2)
+      
+      # update does not work, so delte it and readd it.
+      Devices[2].Delete()
+      Domoticz.Device(Name="Source",     Unit=2, TypeName="Selector Switch", Switchtype=18, Image=5, Used=1, Options=self.SourceOptions).Create()
+      
+    if (3 not in Devices): 
+      Domoticz.Device(Name="Volume",     Unit=3, Type=244, Subtype=73, Switchtype=7, Image=8).Create()
+      if (len(Devices[3].sValue) > 0):
+        self.mainVolume1 = int(Devices[3].sValue) if (Devices[3].nValue != 0) else int(Devices[3].sValue)*-1
+        
+    if (4 not in Devices): 
+      Domoticz.Device(Name="Tuner up",   Unit=4, TypeName="Switch", Image=Images["DenonMarantzIncrease"].ID).Create()
+    
+    if (5 not in Devices): 
+      Domoticz.Device(Name="Tuner down", Unit=5, TypeName="Switch", Image=Images["DenonMarantzDecrease"].ID).Create()
+    
+    if (6 not in Devices): 
+      Domoticz.Device(Name="Station",    Unit=6, Type=243, Subtype=19, Switchtype=0, Image=Images["DenonMarantzboombox"].ID).Create()
+    
+    
       
     self.DumpConfigToLog()
     
@@ -176,7 +195,7 @@ class BasePlugin:
         self.mainOn = True
       elif (detail == "OFF"):
         self.mainOn = False
-      else: LogMessage("Unknown: Action "+action+", Detail '"+detail+"' ignored.", 5)
+      else: LogMessage("Unknown: Action "+action+", Detail '"+detail+"' ignored.", 7)
     elif (action == "SI"):    # Main Zone Source Input
       for key, value in self.selectorMap.items():
         if (detail == value):    
@@ -186,17 +205,17 @@ class BasePlugin:
       if (detail.isdigit()):
         if (abs(self.mainVolume1) != int(detail[0:2])): self.mainVolume1 = int(detail[0:2])
       elif (detail[0:3] == "MAX"): Domoticz.Debug("Unknown: Action "+action+", Detail '"+detail+"' ignored.")
-      else: LogMessage("Unknown: Action "+action+", Detail '"+detail+"' ignored.", 5)
+      else: LogMessage("Unknown: Action "+action+", Detail '"+detail+"' ignored.", 7)
     elif (action == "MU"):    # Overall Mute
       if (detail == "ON"):     self.mainVolume1 = abs(self.mainVolume1)*-1
       elif (detail == "OFF"):    self.mainVolume1 = abs(self.mainVolume1)
-      else: LogMessage("Unknown: Action "+action+", Detail '"+detail+"' ignored.", 5)
+      else: LogMessage("Unknown: Action "+action+", Detail '"+detail+"' ignored.", 7)
     elif (action == "TF"):
       self.stationName = detail[6:].strip()
       
     else:
       if (self.ignoreMessages.find(action) < 0):
-        self.LogMessage("Unknown message '"+action+"' ignored.", 1)
+        self.LogMessage("Unknown message '"+action+"' ignored.", 8)
     self.SyncDevices()
 
     return
@@ -294,7 +313,7 @@ class BasePlugin:
         sValue = str(sValue1)+";"+str(sValue2)
         
       if (Devices[Unit].nValue != nValue) or (Devices[Unit].sValue != sValue):
-        self.LogMessage("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+",'"+str(Devices[Unit].sValue )+"') to: ("+str(nValue)+":'"+str(sValue)+"')", 5)
+        self.LogMessage("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+":'"+str(Devices[Unit].sValue )+"') to: ("+str(nValue)+":'"+str(sValue)+"')", 5)
         Devices[Unit].Update(nValue, sValue)
     return
    
@@ -330,7 +349,7 @@ class BasePlugin:
          
       elif isinstance(Item, (bytes, bytearray)):
         if BytesAsStr:
-          txt = Item.decode("utf-8")
+          txt = html.escape(Item.decode("utf-8", "ignore"))
         else:
           txt = "[ " 
           for b in Item:

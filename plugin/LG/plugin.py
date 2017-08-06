@@ -7,9 +7,10 @@
 # History:
 # 1.0.0   01-07-2017  Initial version
 # 1.0.2   31-07-2017  Updated with new API
+# 1.0.3   06-08-2017  Added mute button
 
 """
-<plugin key="LGtv" name="LG TV" author="elgringo" version="1.0.2" externallink="https://github.com/ericstaal/domoticz/blob/master/">
+<plugin key="LGtv" name="LG TV" author="elgringo" version="1.0.3" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
     <param field="Address" label="IP address" width="200px" required="true" default="192.168.13.15"/>
     <param field="Port" label="Port" width="30px" required="false" default="8080"/>
@@ -48,6 +49,7 @@ import Domoticz
 import collections 
 import base64
 import binascii
+import html
 
 # additional imports
 import re
@@ -162,7 +164,6 @@ class BasePlugin:
 "subtitle_language": 57,
 "audio_description": 145
 }
-  
   def checkConnection(self, checkonly = False):
     # Check connection and connect none
     isConnected = False
@@ -188,7 +189,7 @@ class BasePlugin:
     self.LogMessage("onStart called", 9)
     
     self.connection = Domoticz.Connection(Name="LG_TCP", Transport="TCP/IP", Protocol="HTTP", Address=Parameters["Address"], Port=Parameters["Port"])
-      
+            
     if (self.regexIp.match(Parameters["Address"] )):
       self.ip = Parameters["Address"]
     else:
@@ -213,21 +214,6 @@ class BasePlugin:
       subprocess.call('sudo chmod +wr '+ self.tempFile , shell=True)
       os.remove(self.tempFile)
          
-    # create buttons
-    if (len(Devices) == 0):
-      Domoticz.Device(Name="Power",         Unit=1, TypeName="Switch").Create() 
-      
-      Domoticz.Device(Name="Volume up",     Unit=2, TypeName="Switch").Create()
-      Domoticz.Device(Name="Volume down",   Unit=3, TypeName="Switch").Create()
-      
-      Domoticz.Device(Name="Channel up",    Unit=4, TypeName="Switch").Create()
-      Domoticz.Device(Name="Channel down",  Unit=5, TypeName="Switch").Create()
-      
-      Domoticz.Device(Name="HDMI",          Unit=6, TypeName="Switch").Create() # or TV
-      Domoticz.Device(Name="TV/Radio",      Unit=7, TypeName="Switch").Create() 
-      #Domoticz.Device(Name="OK",            Unit=8, TypeName="Switch").Create() # or HDMI1
-      Domoticz.Device(Name="Exit",          Unit=9, TypeName="Switch").Create()
-      
     #ICONS
     if ("LGtvchanneldown" not in Images): Domoticz.Image('LGtvchanneldown.zip').Create()
     if ("LGtvchannelup" not in Images): Domoticz.Image('LGtvchannelup.zip').Create()
@@ -238,28 +224,30 @@ class BasePlugin:
     if ("LGtvvolplus" not in Images): Domoticz.Image('LGtvvolplus.zip').Create()
     if ("LGtvsystem" not in Images): Domoticz.Image('LGtvsystem.zip').Create()
     if ("LGtvok" not in Images): Domoticz.Image('LGtvok.zip').Create()
+    if ("LGtvmute" not in Images): Domoticz.Image('LGtvmute.zip').Create()
     
-    if (1 in Devices):
-      Devices[1].Update(nValue=Devices[1].nValue, sValue=str(Devices[1].sValue), Image=Images["LGtvplasma_tv"].ID)
-    if (2 in Devices):
-      Devices[2].Update(nValue=Devices[2].nValue, sValue=str(Devices[2].sValue), Image=Images["LGtvvolplus"].ID)
-    if (3 in Devices):
-      Devices[3].Update(nValue=Devices[3].nValue, sValue=str(Devices[3].sValue), Image=Images["LGtvvolmin"].ID)   
-    if (4 in Devices):
-      Devices[4].Update(nValue=Devices[4].nValue, sValue=str(Devices[4].sValue), Image=Images["LGtvchannelup"].ID)    
-    if (5 in Devices):
-      Devices[5].Update(nValue=Devices[5].nValue, sValue=str(Devices[5].sValue), Image=Images["LGtvchanneldown"].ID)  
-    if (6 in Devices):
-      Devices[6].Update(nValue=Devices[6].nValue, sValue=str(Devices[6].sValue), Image=Images["LGtvsystem"].ID)          
-    if (7 in Devices):
-      Devices[7].Update(nValue=Devices[7].nValue, sValue=str(Devices[7].sValue), Image=Images["LGtvsatellite_dish"].ID)  
-    if (8 in Devices):
-      Devices[8].Update(nValue=Devices[8].nValue, sValue=str(Devices[8].sValue), Image=Images["LGtvok"].ID)
-    if (9 in Devices):
-      Devices[9].Update(nValue=Devices[9].nValue, sValue=str(Devices[9].sValue), Image=Images["LGtvexit"].ID)
-      
+    # create buttons
+    if (1 not in Devices):
+      Domoticz.Device(Name="Power",         Unit=1, TypeName="Switch", Image=Images["LGtvplasma_tv"].ID).Create() 
+    if (2 not in Devices):
+      Domoticz.Device(Name="Volume up",     Unit=2, TypeName="Switch", Image=Images["LGtvvolplus"].ID).Create()
+    if (3 not in Devices):
+      Domoticz.Device(Name="Volume down",   Unit=3, TypeName="Switch", Image=Images["LGtvvolmin"].ID).Create()
+    if (4 not in Devices):
+      Domoticz.Device(Name="Channel up",    Unit=4, TypeName="Switch", Image=Images["LGtvchannelup"].ID).Create()
+    if (5 not in Devices):
+      Domoticz.Device(Name="Channel down",  Unit=5, TypeName="Switch", Image=Images["LGtvchanneldown"].ID).Create()
+    if (6 not in Devices):
+      Domoticz.Device(Name="HDMI",          Unit=6, TypeName="Switch", Image=Images["LGtvsystem"].ID).Create()
+    if (7 not in Devices):
+      Domoticz.Device(Name="TV/Radio",      Unit=7, TypeName="Switch", Image=Images["LGtvsatellite_dish"].ID).Create() 
+    if (8 not in Devices):
+      Domoticz.Device(Name="Mute",          Unit=8, TypeName="Switch", Image=Images["LGtvmute"].ID).Create()
+    if (9 not in Devices):
+      Domoticz.Device(Name="Exit",          Unit=9, TypeName="Switch", Image=Images["LGtvexit"].ID).Create()
+    
     self.lastState = Devices[1].nValue != 0 # was on/off
-      
+    
     self.DumpConfigToLog()
     
     return
@@ -307,16 +295,18 @@ class BasePlugin:
   def onMessage(self, Connection, Data):
     self.DumpVariable(Data, "OnMessage SessionState: "+ str(self.sessionState) + ", Data", Level=8, BytesAsStr = True)
     
-    if ('Status' in Data) and ('Data' in Data):
-      datastr = (Data['Data'].decode("utf-8"))
+    if (Connection == self.connection):
       
-      if (Data['Status'] == '200') and (self.sessionState == 1):
-        try:
-          tree = etree.XML(Data['Data'])
-          self.session = tree.find('session').text
-          self.LogMessage("Session ID: "+self.session , 7)
-        except:
-          pass
+      if ('Status' in Data) and ('Data' in Data):
+        datastr = (Data['Data'].decode("utf-8"))
+        
+        if (Data['Status'] == '200') and (self.sessionState == 1):
+          try:
+            tree = etree.XML(Data['Data'])
+            self.session = tree.find('session').text
+            self.LogMessage("Session ID: "+self.session , 7)
+          except:
+            pass
     return
 
   def onCommand(self, Unit, Command, Level, Hue):
@@ -325,8 +315,9 @@ class BasePlugin:
     CommandStr = str(Command)
       
     if (Unit == 1):
-      if ( CommandStr == "Off"):
-        self.queuedCommands.append("power_off")
+      #if ( CommandStr == "Off"):
+      self.queuedCommands.append("power_off")
+      #Devices[1].Update( 0, "Off")
     if (Unit == 2):
       self.queuedCommands.append("volume_up")
     if (Unit == 3):
@@ -340,7 +331,7 @@ class BasePlugin:
     if (Unit == 7):
       self.queuedCommands.append("tv_radio")
     if (Unit == 8):
-      self.queuedCommands.append("select")
+      self.queuedCommands.append("mute")
     if (Unit == 9):
       self.queuedCommands.append("exit")
     
@@ -405,11 +396,10 @@ class BasePlugin:
 
 ####################### Specific helper functions for plugin #######################   
 
-  def sendMessage(self, Message, URL, Verb="POST", Headers={ 'Content-Type': 'application/atom+xml', 'Connection': 'Keep-Alive'}):
-    #'Content-Type': 'application/atom+xml; charset=utf-8'
-    Headers['Host']=Connection.Address+":"+Connection.Port
+  def sendMessage(self, Message, URL, Verb="POST", Headers={ 'Content-Type': 'application/atom+xml; charset=utf-8', 'Connection': 'Keep-Alive'}):
+    Headers['Host']=self.connection.Address+":"+self.connection.Port
     data = {"Verb":Verb, "URL":URL, "Headers": Headers, 'Data': Message}
-    self.DumpVariable(data, "Data to send")
+    self.DumpVariable(data, "Data to send", Level=8, BytesAsStr = True)
     self.connection.Send(data)
 
     return
@@ -433,7 +423,7 @@ class BasePlugin:
         sValue = str(sValue1)+";"+str(sValue2)
         
       if (Devices[Unit].nValue != nValue) or (Devices[Unit].sValue != sValue):
-        self.LogMessage("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+",'"+str(Devices[Unit].sValue )+"') to: ("+str(nValue)+":'"+str(sValue)+"')", 5)
+        self.LogMessage("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+":'"+str(Devices[Unit].sValue )+"') to: ("+str(nValue)+":'"+str(sValue)+"')", 5)
         Devices[Unit].Update(nValue, sValue)
     return
    
@@ -469,7 +459,7 @@ class BasePlugin:
          
       elif isinstance(Item, (bytes, bytearray)):
         if BytesAsStr:
-          txt = Item.decode("utf-8")
+          txt = html.escape(Item.decode("utf-8", "ignore"))
         else:
           txt = "[ " 
           for b in Item:

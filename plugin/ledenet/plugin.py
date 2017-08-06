@@ -74,6 +74,7 @@ import Domoticz
 import collections 
 import base64
 import binascii
+import html
 
 # additional imports
 from datetime import datetime, timedelta
@@ -133,41 +134,32 @@ class BasePlugin:
       Domoticz.Heartbeat(20)
       
     self.LogMessage("onStart called", 9)
-    
-    
     self.connection = Domoticz.Connection(Name="LedenetBinair", Transport="TCP/IP", Protocol="None", Address=Parameters["Address"], Port=Parameters["Port"])
       
-    if (len(Devices) == 0):
-      # 241 = limitless, subtype 2= RGB/ 1= RGBW, switchtype 7 = philip
-      Domoticz.Device(Name="Red",       Unit=1, Type=244, Subtype=73, Switchtype=7).Create()
-      Domoticz.Device(Name="Green",     Unit=2, Type=244, Subtype=73, Switchtype=7).Create()
-      Domoticz.Device(Name="Blue",      Unit=3, Type=244, Subtype=73, Switchtype=7).Create()
-      Domoticz.Device(Name="White",     Unit=4, Type=244, Subtype=73, Switchtype=7).Create()
-      Domoticz.Device(Name="Autolight", Unit=5, TypeName="Switch").Create()
-      Domoticz.Device(Name="Power",     Unit=6, TypeName="Switch").Create()
-      
-      # Devices for color picking do no work since it will not return RGB / HSV values.... 
-      #Domoticz.Device(Name="RGB Light", Unit=7, Type=241, Subtype=2, Switchtype=7).Create() 
-      #Domoticz.Device(Name="Saturatie", Unit=8, Type=244, Subtype=73, Switchtype=7).Create() 
-    
     # ICONS
     if ("LedenetAutoLight" not in Images): Domoticz.Image('LedenetAutoLight.zip').Create()
     if ("LedenetLedRed" not in Images): Domoticz.Image('LedenetLedRed.zip').Create()
-    if ("LedenetedBlue" not in Images): Domoticz.Image('LedenetLedBlue.zip').Create()
+    if ("LedenetLedBlue" not in Images): Domoticz.Image('LedenetLedBlue.zip').Create()
     if ("LedenetLedGreen" not in Images): Domoticz.Image('LedenetLedGreen.zip').Create()
     if ("LedenetLedYellow" not in Images): Domoticz.Image('LedenetLedYellow.zip').Create()
     
-    if (1 in Devices):
-      Devices[1].Update(nValue=Devices[1].nValue, sValue=str(Devices[1].sValue), Image=Images["LedenetLedRed"].ID)
-    if (2 in Devices):
-      Devices[2].Update(nValue=Devices[2].nValue, sValue=str(Devices[2].sValue), Image=Images["LedenetLedGreen"].ID)
-    if (3 in Devices):
-      Devices[3].Update(nValue=Devices[3].nValue, sValue=str(Devices[3].sValue), Image=Images["LedenetLedBlue"].ID)
-    if (4 in Devices):
-      Devices[4].Update(nValue=Devices[4].nValue, sValue=str(Devices[4].sValue), Image=Images["LedenetLedYellow"].ID)
-    if (5 in Devices):
-      Devices[5].Update(nValue=Devices[5].nValue, sValue=str(Devices[5].sValue), Image=Images["LedenetAutoLight"].ID)
- 
+    # 241 = limitless, subtype 2= RGB/ 1= RGBW, switchtype 7 = philip
+    # Devices for color picking do no work since it will not return RGB / HSV values.... 
+    #Domoticz.Device(Name="RGB Light", Unit=7, Type=241, Subtype=2, Switchtype=7).Create() 
+    #Domoticz.Device(Name="Saturatie", Unit=8, Type=244, Subtype=73, Switchtype=7).Create()
+    if (1 not in Devices):
+      Domoticz.Device(Name="Red",       Unit=1, Type=244, Subtype=73, Switchtype=7, Image=Images["LedenetLedRed"].ID).Create()
+    if (2 not in Devices):
+      Domoticz.Device(Name="Green",     Unit=2, Type=244, Subtype=73, Switchtype=7, Image=Images["LedenetLedGreen"].ID).Create()
+    if (3 not in Devices):
+      Domoticz.Device(Name="Blue",      Unit=3, Type=244, Subtype=73, Switchtype=7, Image=Images["LedenetLedBlue"].ID).Create()
+    if (4 not in Devices):
+      Domoticz.Device(Name="White",     Unit=4, Type=244, Subtype=73, Switchtype=7, Image=Images["LedenetLedYellow"].ID).Create()
+    if (5 not in Devices):
+      Domoticz.Device(Name="Autolight", Unit=5, TypeName="Switch", Image=Images["LedenetAutoLight"].ID).Create()
+    if (6 not in Devices):
+      Domoticz.Device(Name="Power",     Unit=6, TypeName="Switch").Create()
+      
     # autolight is not saves in the devices itself
     self.autolight = Devices[5].nValue != 0
     if self.autolight:
@@ -185,7 +177,6 @@ class BasePlugin:
       except:
         pass
       self.currentStatus[i] = self.uiToRGB(self.dimmerValues[i])
-      
       
     self.LogMessage("Started current status: " + str(self.currentStatus) + " dimmer values: " + str(self.dimmerValues), 2 )
     
@@ -538,7 +529,7 @@ class BasePlugin:
         sValue = str(sValue1)+";"+str(sValue2)
         
       if (Devices[Unit].nValue != nValue) or (Devices[Unit].sValue != sValue):
-        self.LogMessage("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+",'"+str(Devices[Unit].sValue )+"') to: ("+str(nValue)+":'"+str(sValue)+"')", 5)
+        self.LogMessage("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+":'"+str(Devices[Unit].sValue )+"') to: ("+str(nValue)+":'"+str(sValue)+"')", 5)
         Devices[Unit].Update(nValue, sValue)
     return
    
@@ -574,7 +565,7 @@ class BasePlugin:
          
       elif isinstance(Item, (bytes, bytearray)):
         if BytesAsStr:
-          txt = Item.decode("utf-8")
+          txt = html.escape(Item.decode("utf-8", "ignore"))
         else:
           txt = "[ " 
           for b in Item:

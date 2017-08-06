@@ -46,6 +46,7 @@ import Domoticz
 import collections 
 import binascii
 import base64
+import html
 
 # additional imports
 import re
@@ -253,7 +254,7 @@ class BasePlugin:
         sValue = str(sValue1)+";"+str(sValue2)
         
       if (Devices[Unit].nValue != nValue) or (Devices[Unit].sValue != sValue):
-        self.LogMessage("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+",'"+str(Devices[Unit].sValue )+"') to: ("+str(nValue)+":'"+str(sValue)+"')", 5)
+        self.LogMessage("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+":'"+str(Devices[Unit].sValue )+"') to: ("+str(nValue)+":'"+str(sValue)+"')", 5)
         Devices[Unit].Update(nValue, sValue)
     return
    
@@ -289,7 +290,7 @@ class BasePlugin:
          
       elif isinstance(Item, (bytes, bytearray)):
         if BytesAsStr:
-          txt = Item.decode("utf-8")
+          txt = html.escape(Item.decode("utf-8", "ignore"))
         else:
           txt = "[ " 
           for b in Item:
