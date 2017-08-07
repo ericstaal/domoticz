@@ -12,9 +12,10 @@
 # 1.0.0   01-07-2017  Initial version
 # 2.6.0   31-07-2017  Updated with new API
 # 2.6.1   06-08-2017  Added own surce names
+# 2.6.2   07-08-2017  Selector switch to buttons
 
 """
-<plugin key="DenonMarantz" name="Denon / Marantz AVR Amplifier" author="dnpwwo/artemgy/elgringo" version="2.6.1" externallink="https://github.com/ericstaal/domoticz/blob/master/">
+<plugin key="DenonMarantz" name="Denon / Marantz AVR Amplifier" author="dnpwwo/artemgy/elgringo" version="2.6.2" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
     <param field="Address" label="IP Address" width="200px" required="true" default="127.0.0.1"/>
     <param field="Port" label="Port" width="30px" required="true" default="23"/>
@@ -117,12 +118,12 @@ class BasePlugin:
       self.SourceOptions = {'LevelActions': '|'*Parameters["Mode3"].count('|'),
                'LevelNames': Parameters["Mode3"],
                'LevelOffHidden': 'false',
-               'SelectorStyle': '1'}
+               'SelectorStyle': '0'} # 1 = combobox, 0 = buttons
     else:
       self.SourceOptions = {'LevelActions': '|'*Parameters["Mode4"].count('|'),
                'LevelNames': Parameters["Mode4"],
                'LevelOffHidden': 'false',
-               'SelectorStyle': '1'}
+               'SelectorStyle': '0'}
       
     #ICONS
     if ("DenonMarantzIncrease" not in Images): Domoticz.Image('DenonMarantzIncrease.zip').Create()

@@ -5,13 +5,14 @@
 #
 # History:
 # 1.0.0   05-08-2017  Initial version
+# 1.0.1   06-08-2017  Make priority channel configurable
 
 """
 <plugin key="Hyperion" name="Hyperion" author="elgringo" version="1.0.2" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
     <param field="Address" label="IP Address" width="200px" required="true" default="192.168.13.9"/>
     <param field="Port" label="Port" width="40px" required="true" default="19444"/>
-    
+    <param field="Mode1" label="Priority channel" width="200px" default="1" />
     <param field="Mode6" label="Debug level" width="150px">
       <options>
         <option label="0 (No logging)" value="0" default="true"/>
@@ -89,6 +90,14 @@ class BasePlugin:
       Domoticz.Debugging(1)
     else:
       Domoticz.Heartbeat(20)
+     
+    try:
+      self.priority = int(Parameters["Mode1"])
+      if self.priority<0:
+        self.LogError("Priority is smaller than 0 ("+Parameters["Mode1"]+") this is not allowed, using 1 as priority")
+        self.priority = 1
+    except:
+      self.LogError("Priority '"+Parameters["Mode1"]+"' is not an integer, using 1 as priority")
       
     self.LogMessage("onStart called", 9)
     self.connection = Domoticz.Connection(Name="Hyperion", Transport="TCP/IP", Protocol="None", Address=Parameters["Address"], Port=Parameters["Port"])
@@ -265,7 +274,9 @@ class BasePlugin:
     
     if Unit == 6: # mode
       if ( CommandStr == "Off") or (Level == 0):
-        self.sendMessage({"command" : "clearall"})
+        #self.sendMessage({"command" : "clearall"})
+        self.sendMessage({"command" : "clear", "priority" : self.priority})
+        
         Level = 0
       elif (Level == 10):
         self.sendMessage({"command" : "color", "color": self.currentColor, "priority": self.priority})
