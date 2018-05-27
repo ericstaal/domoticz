@@ -13,9 +13,11 @@
 # 2.6.0   31-07-2017  Updated with new API
 # 2.6.1   06-08-2017  Added own surce names
 # 2.6.2   07-08-2017  Selector switch to buttons
+# 2.6.3   07-04-2018  Report connect error only once
+# 2.6.4   22-05-2018  Onheartbeat debug level to 8
 
 """
-<plugin key="DenonMarantz" name="Denon / Marantz AVR Amplifier" author="dnpwwo/artemgy/elgringo" version="2.6.2" externallink="https://github.com/ericstaal/domoticz/blob/master/">
+<plugin key="DenonMarantz" name="Denon / Marantz AVR Amplifier" author="dnpwwo/artemgy/elgringo" version="2.6.4" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
     <param field="Address" label="IP Address" width="200px" required="true" default="127.0.0.1"/>
     <param field="Port" label="Port" width="30px" required="true" default="23"/>
@@ -56,7 +58,7 @@ import Domoticz
 import collections 
 import base64
 import binascii
-import html
+from html import escape
 
 # additional imports
 import datetime
@@ -81,18 +83,24 @@ class BasePlugin:
 
   SourceOptions = {}
   
+  errorReported = False
+  
   def checkConnection(self, checkonly = False):
     # Check connection and connect none
     isConnected = False
     
-    if not self.connection is None:
-      if self.connection.Connected():
-        isConnected = True
-      else:
-        if (not self.connection.Connecting()) and (not checkonly):
-          self.outstandingMessages = 0
-          self.connection.Connect()
-    
+    try:
+      if not self.connection is None:
+        if self.connection.Connected():
+          isConnected = True
+        else:
+          if (not self.connection.Connecting()) and (not checkonly):
+            self.outstandingMessages = 0
+            self.connection.Connect()
+    except:
+      self.connection = None
+      self.LogError("CheckConnection error, try to reset")
+
     return isConnected
     
   def onStart(self):
@@ -171,10 +179,15 @@ class BasePlugin:
     if (Status == 0):
       self.LogMessage("Connected successfully to: "+Connection.Address+":"+Connection.Port, 2)
       self.connection.Send('ZM?\r')
+      if self.errorReported:
+        self.errorReported = False
       
     else:
-      self.LogMessage("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description, 2)
-      self.SyncDevices()
+      if not self.errorReported:
+        self.LogMessage("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description, 2)
+        self.SyncDevices()
+        self.errorReported = True
+	  
 
     return
 
@@ -268,7 +281,7 @@ class BasePlugin:
     return
 
   def onHeartbeat(self):
-    self.LogMessage("onHeartbeat called, open messages: " + str(self.outstandingMessages), 9)
+    self.LogMessage("onHeartbeat called, open messages: " + str(self.outstandingMessages), 8)
     if self.checkConnection(): # if false will initialize a new connection
       if (self.outstandingMessages > self.maxOutstandingMessages):
         self.connection.Disconnect()
@@ -350,7 +363,7 @@ class BasePlugin:
          
       elif isinstance(Item, (bytes, bytearray)):
         if BytesAsStr:
-          txt = html.escape(Item.decode("utf-8", "ignore"))
+          txt = escape(Item.decode("utf-8", "ignore"))
         else:
           txt = "[ " 
           for b in Item:
