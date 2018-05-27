@@ -8,9 +8,10 @@
 # 1.0.0   01-07-2017  Initial version
 # 1.0.2   31-07-2017  Updated with new API
 # 1.0.3   06-08-2017  Added mute button
+# 1.0.4   25-05-2018  Removed bash ping used internal ICMP
 
 """
-<plugin key="LGtv" name="LG TV" author="elgringo" version="1.0.3" externallink="https://github.com/ericstaal/domoticz/blob/master/">
+<plugin key="LGtv" name="LG TV" author="elgringo" version="1.0.4" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
     <param field="Address" label="IP address" width="200px" required="true" default="192.168.13.15"/>
     <param field="Port" label="Port" width="30px" required="false" default="8080"/>
@@ -24,8 +25,12 @@
       </options>
     </param>
     <param field="Mode4" label="Pairing key" width="200px" default="" /> 
-    <param field="Mode5" label="File location" width="200px" required="true" default="/tmp/" /> 
-        
+    <param field="Mode5" label="Use build in ICMP" width="200px" required="true"> 
+      <options>
+        <option label="No (bash ping is used)" value="0" default="true"/>
+        <option label="Yes (plugin ICMP is used)" value="1"/>
+      </options>
+    </param>
     <param field="Mode6" label="Debug level" width="150px">
       <options>
         <option label="0 (No logging)" value="0" default="true"/>
@@ -49,28 +54,28 @@ import Domoticz
 import collections 
 import base64
 import binascii
-import html
+from html import escape
 
 # additional imports
 import re
-import os
-import socket
-import struct
-import subprocess
 import xml.etree.ElementTree as etree
+
+# bash ping
+import os
+import subprocess
 
 class BasePlugin:
   
   connection = None           # Network connection
-  outstandingMessages = 0     # Open messages without reply
-  maxOutstandingMessages = 5  # lose conenction after
   logLevel = 0                # logLevel
+  icmpConnection = None       # ping
+  useBashPing = False
+  tempFile = None
   
   regexOnline = re.compile('1 packets transmitted, 1 (packets |)received')
   regexIp = re.compile('^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$')
   ip = None
   mac = None
-  tempFile = None
   port = 8080
   lastState = False
   key = "" 
@@ -173,12 +178,13 @@ class BasePlugin:
         isConnected = True
       else:
         if (not self.connection.Connecting()) and (not checkonly):
-          self.outstandingMessages = 0
           self.connection.Connect()
     
     return isConnected
     
   def onStart(self):
+    self.useBashPing = Parameters["Mode5"] != "1"
+    self.tempFile = "/tmp/ping_"+Parameters["Address"]
     try:
       self.logLevel = int(Parameters["Mode6"])
     except:
@@ -195,8 +201,6 @@ class BasePlugin:
     else:
       self.LogError("'"+Parameters["Address"]+"' is not a valid IP address." )
     
-    self.tempFile = Parameters["Mode5"] + "ping_"+Parameters["Address"]
-    self.LogMessage ( "Temp file: " + self.tempFile, 3)
     try:
       self.port = int(Parameters["Port"])
     except Exception as e:
@@ -209,11 +213,18 @@ class BasePlugin:
       
     self.key = Parameters["Mode4"] 
     
-    # initial cleanup
-    if (os.path.isfile(self.tempFile)):
-      subprocess.call('sudo chmod +wr '+ self.tempFile , shell=True)
-      os.remove(self.tempFile)
-         
+    
+    if self.useBashPing:
+      self.LogMessage ( "Pinging with bash, temp file: " + self.tempFile, 1)
+    
+      if (os.path.isfile(self.tempFile)):
+        subprocess.call('sudo chmod +wr '+ self.tempFile , shell=True)
+        os.remove(self.tempFile)
+        
+    else:
+      self.LogMessage ( "Pinging with internal ICMP connection", 1)    
+    
+   
     #ICONS
     if ("LGtvchanneldown" not in Images): Domoticz.Image('LGtvchanneldown.zip').Create()
     if ("LGtvchannelup" not in Images): Domoticz.Image('LGtvchannelup.zip').Create()
@@ -253,8 +264,11 @@ class BasePlugin:
     return
 
   def onStop(self):
-    self.LogMessage("onStop called", 9)
-    
+    self.LogMessage("onStop called", 4)
+    if (self.icmpConnection != None):
+      self.icmpConnection.Disconnect()
+      self.icmpConnection = None
+
     return
 
   def onConnect(self, Connection, Status, Description):
@@ -307,6 +321,24 @@ class BasePlugin:
             self.LogMessage("Session ID: "+self.session , 7)
           except:
             pass
+    else: # PING  
+      if not self.useBashPing:
+        if isinstance(Data, dict) and (Data["Status"] == 0): 
+          self.LogMessage("Ping reply [ms]: "+str(Data["ElapsedMs"]) , 6)
+          if not self.lastState: # last state was offline
+            Devices[1].Update( 1, "On") # update
+            self.lastState = True 
+        else:
+          # not alive
+          self.LogMessage("Not alive", 6)
+          if self.lastState:
+            Devices[1].Update( 0, "Off")
+            self.lastState = False
+            
+        # reset connection
+        if self.icmpConnection != None:
+          self.icmpConnection.Disconnect()
+          self.icmpConnection = None
     return
 
   def onCommand(self, Unit, Command, Level, Hue):
@@ -358,39 +390,49 @@ class BasePlugin:
     return
 
   def onHeartbeat(self):
-    self.LogMessage("onHeartbeat called, open messages: " + str(self.outstandingMessages), 9)
+    self.LogMessage("onHeartbeat called", 9)
    
     # check if TV is online
-    if (os.path.isfile(self.tempFile)):
-      online = False
-      try:
-      
-        # check current status
-        subprocess.call('sudo chmod +wr '+ self.tempFile , shell=True)
+    if self.useBashPing:
+       # check if TV is online
+      if (os.path.isfile(self.tempFile)):
+        online = False
+        try:
+        
+          # check current status
+          subprocess.call('sudo chmod +wr '+ self.tempFile , shell=True)
+            
+          file = open(self.tempFile)
+          text = file.read()
+          file.close()
           
-        file = open(self.tempFile)
-        text = file.read()
-        file.close()
-        
-        online = len(self.regexOnline.findall(text)) > 0
-        self.LogMessage("Is device online: "+ str(online), 7)
-        os.remove(self.tempFile)
-      except Exception as e:
-        self.LogError("Failed reading '"+self.tempFile+"' : "+ str(e))
-        
-      if online: # device is online
-        if not self.lastState: # last state was offline
-          Devices[1].Update( 1, "On") # update
-          self.lastState = True 
+          online = len(self.regexOnline.findall(text)) > 0
+          self.LogMessage("Is device online: "+ str(online), 7)
+          os.remove(self.tempFile)
+        except Exception as e:
+          self.LogError("Failed reading '"+self.tempFile+"' : "+ str(e))
+          
+        if online: # device is online
+          if not self.lastState: # last state was offline
+            Devices[1].Update( 1, "On") # update
+            self.lastState = True 
+        else:
+          self.session = None
+          if self.lastState:
+            Devices[1].Update( 0, "Off")
+            self.lastState = False
+            
+      command = 'ping -c 1 -n -s 1 -q '+ self.ip  + ' > '+self.tempFile+' &'
+      subprocess.call(command , shell=True)
+      self.LogMessage(command, 9)
+    else:
+      if (self.icmpConnection == None):
+        self.icmpConnection = Domoticz.Connection(Name="LG_ICMP", Transport="ICMP/IP", Protocol="ICMP", Address=Parameters["Address"])
+        self.icmpConnection.Listen()
       else:
-        self.session = None
-        if self.lastState:
-          Devices[1].Update( 0, "Off")
-          self.lastState = False
-          
-    command = 'ping -c 1 -n -s 1 -q '+ self.ip  + ' > '+self.tempFile+' &'
-    subprocess.call(command , shell=True)
-    self.LogMessage(command, 9)
+        self.LogMessage("onHeartbeat called, send PING message", 6)
+        self.icmpConnection.Send("Domoticz")
+    
       
     return
 
@@ -459,7 +501,7 @@ class BasePlugin:
          
       elif isinstance(Item, (bytes, bytearray)):
         if BytesAsStr:
-          txt = html.escape(Item.decode("utf-8", "ignore"))
+          txt = escape(Item.decode("utf-8", "ignore"))
         else:
           txt = "[ " 
           for b in Item:
