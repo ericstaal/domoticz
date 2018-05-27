@@ -7,9 +7,10 @@
 # History:
 # 1.0.0   01-07-2017  Initial version
 # 1.0.1   31-07-2017  Updated with new API
+# 1.0.2   22-05-2018  Onheartbeat debug level to 8
 
 """
-<plugin key="Hosola_Omnik" name="Hosola / Omnik solar inverter" author="elgringo" version="1.0.1" externallink="https://github.com/ericstaal/domoticz/blob/master/">
+<plugin key="Hosola_Omnik" name="Hosola / Omnik solar inverter" author="elgringo" version="1.0.2" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
     <param field="Address" label="IP Address" width="200px" required="true" default="127.0.0.1"/>
     <param field="Port" label="Port" width="30px"  required="true" default="8899"/>
@@ -58,10 +59,9 @@
 import Domoticz
 import collections 
 import base64
-import html
+from html import escape
 
 # additional imports
-import sys
 
 class BasePlugin:
   
@@ -79,14 +79,17 @@ class BasePlugin:
   def checkConnection(self, checkonly = False):
     # Check connection and connect none
     isConnected = False
-    
-    if not self.connection is None:
-      if self.connection.Connected():
-        isConnected = True
-      else:
-        if (not self.connection.Connecting()) and (not checkonly):
-          self.outstandingMessages = 0
-          self.connection.Connect()
+    try:
+      if not self.connection is None:
+        if self.connection.Connected():
+          isConnected = True
+        else:
+          if (not self.connection.Connecting()) and (not checkonly):
+            self.outstandingMessages = 0
+            self.connection.Connect()
+    except:
+      self.connection = None
+      self.LogError("CheckConnection error, try to reset")
     
     return isConnected
     
@@ -223,7 +226,7 @@ class BasePlugin:
     return
 
   def onHeartbeat(self):
-    self.LogMessage("onHeartbeat called, open messages: " + str(self.outstandingMessages), 9)
+    self.LogMessage("onHeartbeat called, open messages: " + str(self.outstandingMessages), 8)
     
     try:
       if self.checkConnection(): # checks if connect if not retry
@@ -365,7 +368,7 @@ class BasePlugin:
          
       elif isinstance(Item, (bytes, bytearray)):
         if BytesAsStr:
-          txt = html.escape(Item.decode("utf-8", "ignore"))
+          txt = escape(Item.decode("utf-8", "ignore"))
         else:
           txt = "[ " 
           for b in Item:
