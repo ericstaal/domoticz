@@ -12,9 +12,10 @@
 # History:
 # 1.0.0   01-07-2017  Initial version
 # 1.0.2   31-07-2017  Updated with new API
+# 1.0.3   22-05-2018  Onheartbeat debug level to 4=8, remove urllib for python 3.5
 
 """
-<plugin key="Ledenet" name="LedeNet" author="elgringo" version="1.0.2" externallink="https://github.com/ericstaal/domoticz/blob/master/">
+<plugin key="Ledenet" name="LedeNet" author="elgringo" version="1.0.3" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
     <param field="Address" label="IP Address" width="200px" required="true" default="192.168.13.80"/>
     <param field="Port" label="Port" width="30px" required="true" default="5577"/>
@@ -74,14 +75,14 @@ import Domoticz
 import collections 
 import base64
 import binascii
-import html
+from html import escape
 
 # additional imports
 from datetime import datetime, timedelta
 import time
-import random
-import urllib.request 
+import subprocess
 import json
+import re
 
 class BasePlugin:
   
@@ -105,20 +106,26 @@ class BasePlugin:
   mustSendUpdate = False    # if the domotica values has been changed but not yet updated to the ledenet (connection problems)
   mustForceOff = False      # If autolight is enabled, light is on an no sunset on startup
   
-  domoticzusername = "user"   # needed to get sunset times
-  domoticzpassword = "pwd"
+  domoticzusername = "pi"   # needed to get sunset times
+  domoticzpassword = "pi"
   
   def checkConnection(self, checkonly = False):
     # Check connection and connect none
     isConnected = False
     
-    if not self.connection is None:
-      if self.connection.Connected():
-        isConnected = True
-      else:
-        if (not self.connection.Connecting()) and (not checkonly):
-          self.outstandingMessages = 0
-          self.connection.Connect()
+    try:
+      if not self.connection is None:
+        if self.connection.Connected():
+          isConnected = True
+        else:
+          if (not self.connection.Connecting()) and (not checkonly):
+            self.outstandingMessages = 0
+            self.connection.Connect()
+          
+    except:
+      self.connection = None
+      self.LogError("CheckConnection error, try to reset")
+
     
     return isConnected
     
@@ -276,7 +283,7 @@ class BasePlugin:
     return
 
   def onHeartbeat(self):
-    self.LogMessage("onHeartbeat called, open messages: " + str(self.outstandingMessages), 9)
+    self.LogMessage("onHeartbeat called, open messages: " + str(self.outstandingMessages), 8)
     
     if self.checkConnection():
       uiUpdated = False
@@ -385,20 +392,17 @@ class BasePlugin:
     # sunrise from domoticz... But I don't know how to retrieve it....
     
     try:
-      domoticzurl = 'https://127.0.0.1:8443/json.htm?type=command&param=getSunRiseSet'
-      encoding = 'utf-8'
+      cmd = '''curl -s --connect-timeout 2 --max-time 5 "Accept: application/json" "http://%s:%s@127.0.0.1:8080/json.htm?type=command&param=getSunRiseSet" | grep "Sunset"''' % (self.domoticzusername, self.domoticzpassword) 
+      p = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
+      output = str(p.stdout.readline())
+      p.kill()
+      time = output[output.find('''" : "''')+5:]
+      time = time[0:time.find('''"''')]
       
-      inlog = '%s:%s' % (self.domoticzusername, self.domoticzpassword) 
-      base64string = base64.b64encode(inlog.encode(encoding)).decode(encoding)
-      request = urllib.request.Request(domoticzurl)
-      request.add_header("Authorization", "Basic %s" % base64string)
-      response = urllib.request.urlopen(request)
-      data = response.read()
-      
-      JSON_object = json.loads(data.decode(encoding))
-      time = JSON_object['Sunset'].split(':')
+      timesplit = time.split(':')
+    
       now = datetime.now()
-      ret = datetime(now.year, now.month, now.day, int(time[0]), int(time[1]), 0)
+      ret = datetime(now.year, now.month, now.day, int(timesplit[0]), int(timesplit[1]), 0)
       # when started after sunset use 'now'
       now = now + timedelta(minutes = int(Parameters["Mode4"])) 
       if (now > ret):
@@ -420,12 +424,10 @@ class BasePlugin:
     minTimeColor = int(Parameters["Mode2"])
     maxTimeColor = int(Parameters["Mode3"])
     
-    random.seed()
-    
     lightOn = self.volgendeZonondergang()
     # config loggen 
     self.LogMessage("Autolight data: margin(min) " + str(marginLight) + ", Endtime(min):" + str(endtimeLight) +" ("+str(timedelta(minutes = endtimeLight))+"), switchtime ["+str(minTimeColor)+","+str(maxTimeColor)+"], Suset:"+str(lightOn), 2)
-    margin = random.randint(0, marginLight) - (marginLight*3) / 4 # 1/4 after sunset 3/4 before sunset
+    margin = self.RandomNumber(0, marginLight) - (marginLight*3) / 4 # 1/4 after sunset 3/4 before sunset
     lightOn = lightOn + timedelta(minutes = margin)
     
     # create record
@@ -434,7 +436,7 @@ class BasePlugin:
       minTimeColor = 1 
       maxTimeColor = 3
       
-    margin = random.randint(0, marginLight) - marginLight / 2 + endtimeLight
+    margin = self.RandomNumber(0, marginLight) - marginLight / 2 + endtimeLight
     lightOff = datetime(lightOn.year, lightOn.month, lightOn.day) + timedelta(minutes = margin)
     if ((Parameters["Mode6"] == "10") or (lightOn > lightOff)):
       lightOff = lightOn+timedelta(minutes=10)
@@ -444,7 +446,7 @@ class BasePlugin:
     
     # Add color changes
     while switchTime < lightOff:
-      margin = random.randint(minTimeColor, maxTimeColor)
+      margin = self.RandomNumber(minTimeColor, maxTimeColor)
       switchTime = switchTime + timedelta(minutes = margin)
       if (switchTime < lightOff):
         self.addRecord(switchTime, self.lightRandomColor)
@@ -472,10 +474,10 @@ class BasePlugin:
     self.generateAutolightData() # Finished generate new data
 
   def lightRandomColor(self, selfUpdate = True):
-    red = random.randint(0, 255)
-    green = random.randint(0, 255)
-    blue = random.randint(0, 255)
-    white = random.randint(0, 40) # little less white to aad more color cahanges
+    red = self.RandomNumber(0, 255)
+    green = self.RandomNumbert(0, 255)
+    blue = self.RandomNumber(0, 255)
+    white = self.RandomNumber(0, 40) # little less white to aad more color cahanges
     
     minBrightness = 100
     maxBrightness = 600
@@ -565,7 +567,7 @@ class BasePlugin:
          
       elif isinstance(Item, (bytes, bytearray)):
         if BytesAsStr:
-          txt = html.escape(Item.decode("utf-8", "ignore"))
+          txt = escape(Item.decode("utf-8", "ignore"))
         else:
           txt = "[ " 
           for b in Item:
@@ -608,6 +610,15 @@ class BasePlugin:
   def LogError(self, Message):
     self.LogMessage(Message, -1)
     return  
+    
+  def RandomNumber(self, min, max):
+    # import random causes crash :)
+    cmd = '''shuf -i %d-%d -n 1''' % (min, max) 
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
+    output = str(p.stdout.readline())
+    p.kill()
+    return int(re.findall("\d+", output)[0])
+
     
   def stringToBase64(self, s):
     return base64.b64encode(s.encode('utf-8')).decode("utf-8")
