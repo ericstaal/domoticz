@@ -7,9 +7,10 @@
 # History:
 # 1.0.0   01-07-2017  Initial version
 # 1.0.1   31-07-2017  Updated with new API
+# 1.0.2   14-04-2018  Only update when size > 0
 
 """
-<plugin key="RaspberryInfo" name="System Status" author="elgringo" version="1.0.1" externallink="https://github.com/ericstaal/domoticz/blob/master/">
+<plugin key="RaspberryInfo" name="System Status" author="elgringo" version="1.0.2" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
     <param field="Mode1" label="Size" width="50px" required="true">
       <options>
@@ -49,7 +50,7 @@ import Domoticz
 import collections 
 import base64
 import binascii
-import html
+from html import escape
 
 # additional imports
 import os
@@ -113,7 +114,10 @@ class BasePlugin:
     self.LogMessage("onHeartbeat called", 9)
     try:
       # size
-      data = os.popen("df -k | grep -vE '^Filesystem|tmpfs|cdrom' | awk '{ print $6 \" \" $4 }'").read()
+      proces = os.popen("df -k | grep -vE '^Filesystem|tmpfs|cdrom' | awk '{ print $6 \" \" $4 }'")
+      data = proces.read()
+      proces.close()
+      
       # / 1.5g
       # /boot ...
       for line in data.split("\n"):
@@ -121,17 +125,23 @@ class BasePlugin:
         if koloms[0] == '/':
           size = float(koloms[1])
           
-          if Parameters["Mode1"] == "Gb":
-            size = size / 1048576
-          elif Parameters["Mode1"] == "Mb":
-            size = size / 1024
-          
-          self.UpdateDevice(1, 0, round(size,1))
+          if (size > 0):
+            
+            if Parameters["Mode1"] == "Gb":
+              size = size / 1048576
+            elif Parameters["Mode1"] == "Mb":
+              size = size / 1024
+            
+            self.UpdateDevice(1, 0, round(size,1))
           break 
       
+      
       # temperature
-      data = os.popen("cat /sys/class/thermal/thermal_zone0/temp").read()    
+      proces = os.popen("cat /sys/class/thermal/thermal_zone0/temp")
+      data = proces.read()   
+      proces.close()
       temp = round(int(data) / 1000,1)
+      
       self.UpdateDevice(2, 0, temp)
         
     except Exception as e:
@@ -196,7 +206,7 @@ class BasePlugin:
          
       elif isinstance(Item, (bytes, bytearray)):
         if BytesAsStr:
-          txt = html.escape(Item.decode("utf-8", "ignore"))
+          txt = escape(Item.decode("utf-8", "ignore"))
         else:
           txt = "[ " 
           for b in Item:
