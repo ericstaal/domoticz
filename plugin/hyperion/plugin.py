@@ -6,6 +6,7 @@
 # History:
 # 1.0.0   05-08-2017  Initial version
 # 1.0.1   06-08-2017  Make priority channel configurable
+# 1.0.2   22-05-2018  Remove urllib dependancies
 
 """
 <plugin key="Hyperion" name="Hyperion" author="elgringo" version="1.0.2" externallink="https://github.com/ericstaal/domoticz/blob/master/">
@@ -36,17 +37,14 @@ import Domoticz
 import collections 
 import base64
 import binascii
-import html
+from html import escape
 
 # additional imports
 import json
 
-
 from datetime import datetime, timedelta
 import time
-import random
-import urllib.request 
-import json
+
 
 class BasePlugin:
   
@@ -390,7 +388,7 @@ class BasePlugin:
          
       elif isinstance(Item, (bytes, bytearray)):
         if BytesAsStr:
-          txt = html.escape(Item.decode("utf-8", "ignore"))
+          txt = escape(Item.decode("utf-8", "ignore"))
         else:
           txt = "[ " 
           for b in Item:
