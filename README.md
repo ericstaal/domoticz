@@ -15,9 +15,6 @@ Add script to `/etc/rc.local`
 ## plugins ##
 All written according the new format see https://www.domoticz.com/wiki/Developing_a_Python_plugin
 
-## plugins/wolping ##
-Python plugin which combines a ping to check if a host is online and a WOL to activate it. Interval can be configured
-
 ## plugins/hosola ##
 Python plugin to read out hosola / omnik solar inverters. Auto detect which phases are connected
 
