@@ -8,19 +8,21 @@
 # 1.0.0   01-07-2017  Initial version
 # 1.0.1   31-07-2017  Updated with new API
 # 1.0.2   22-05-2018  Onheartbeat debug level to 8
+# 1.0.3   12-06-2018  Connection bugfix when set to nonen, outstanding messages cleared
+# 1.0.4   13-06-2018  CLean up code
 
 """
-<plugin key="Hosola_Omnik" name="Hosola / Omnik solar inverter" author="elgringo" version="1.0.2" externallink="https://github.com/ericstaal/domoticz/blob/master/">
+<plugin key="Hosola_Omnik" name="Hosola / Omnik solar inverter" author="elgringo" version="1.0.4" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
     <param field="Address" label="IP Address" width="200px" required="true" default="127.0.0.1"/>
     <param field="Port" label="Port" width="30px"  required="true" default="8899"/>
-    <param field="Mode1" label="Serial number (intefers only)" width="150px" required="true" />
+    <param field="Mode1" label="Serial number (integers only)" width="150px" required="true" />
     <param field="Mode2" label="Disconnect after (tries)"width="50px"  required="true">
       <options>
-        <option label="0" value="0"/>
+        <option label="0" value="0" default="true"/>
         <option label="1" value="1"/>
         <option label="2" value="2"/>
-        <option label="3" value="3" default="true" />
+        <option label="3" value="3"/>
         <option label="4" value="4"/>
         <option label="5" value="5"/>
         <option label="6" value="6"/>
@@ -87,6 +89,10 @@ class BasePlugin:
           if (not self.connection.Connecting()) and (not checkonly):
             self.outstandingMessages = 0
             self.connection.Connect()
+      else:
+        self.outstandingMessages = 0
+        self.connection = Domoticz.Connection(Name="Hosola_OmnikBinair", Transport="TCP/IP", Protocol="None", Address=Parameters["Address"], Port=Parameters["Port"])
+        self.connection.Connect()
     except:
       self.connection = None
       self.LogError("CheckConnection error, try to reset")
@@ -103,7 +109,7 @@ class BasePlugin:
       Domoticz.Debugging(1)
     self.LogMessage("onStart called", 9)
     
-    self.connection = Domoticz.Connection(Name="Hosola_OmnikBinair", Transport="TCP/IP", Protocol="None", Address=Parameters["Address"], Port=Parameters["Port"])
+    #self.connection = Domoticz.Connection(Name="Hosola_OmnikBinair", Transport="TCP/IP", Protocol="None", Address=Parameters["Address"], Port=Parameters["Port"])
       
     maxOutstandingMessages = int(Parameters["Mode2"])
     Domoticz.Heartbeat(int(Parameters["Mode3"])) 
@@ -160,10 +166,8 @@ class BasePlugin:
     self.readBytes.extend(Data) 
     
     if len(self.readBytes) > 155:
-      if (self.readBytes[0] == 0x68 and self.readBytes[2] == 0x41): # what is the inital series?
+      if (self.readBytes[0] == 0x68 and self.readBytes[2] == 0x41 and self.readBytes[154 ]== 0x4F and self.readBytes[155] == 0x4B): 
         self.outstandingMessages = self.outstandingMessages - 1
-    
-      if (self.readBytes[154]==0x4F and self.readBytes[155] == 0x4B): 
         vac = []
         vdc = []
         pac = []
@@ -180,7 +184,7 @@ class BasePlugin:
         temperature = self.GetValue(self.readBytes,31,2,10) #Celcius
         self.totalEnergy = self.GetValue(self.readBytes,71,4,0.01) # wh 0.01
         
-        self.outstandingMessages = self.outstandingMessages - 1
+        #self.outstandingMessages = self.outstandingMessages - 1
         
         self.LogMessage("VAC: "+str(vac)+" VDC: "+str(vdc)+" PAC: "+str(pac)+" Total: "+str(self.totalEnergy)+ " Temperature: "+str(temperature), 5)
         
@@ -275,14 +279,24 @@ class BasePlugin:
       self.LogError(Parameters["Mode1"]+" is not a valid serial number!")
   
   def sendNullValues(self):
-    self.UpdateDevice(1, 0, 0)
-    self.UpdateDevice(2, 0, 0)
+    # id 1= temp
+    # id 2= VAC phase 1
+    # id 3= VDC phase 1
+    # id 4= Power phase 1
+    # id 5= VAC phase 2
+    # id 6= VDC phase 2
+    # id 7= Power phase 2
+    # id 8= VAC phase 3
+    # id 9= VDC phase 3
+    # id 10= Power phase 3
+    #self.UpdateDevice(1, 0, 0)
+    #self.UpdateDevice(2, 0, 0)
     self.UpdateDevice(3, 0, 0)
     self.UpdateDevice(4, 0, 0, self.totalEnergy)
-    self.UpdateDevice(5, 0, 0)
+    #self.UpdateDevice(5, 0, 0)
     self.UpdateDevice(6, 0, 0)
     self.UpdateDevice(7, 0, 0, self.totalEnergy)
-    self.UpdateDevice(8, 0, 0)
+    #self.UpdateDevice(8, 0, 0)
     self.UpdateDevice(9, 0, 0)
     self.UpdateDevice(10, 0, 0, self.totalEnergy)
     
