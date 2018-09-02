@@ -359,9 +359,7 @@ class BasePlugin:
             self.lastState = False
             
         # reset connection
-        if self.icmpConnection != None:
-          self.icmpConnection.Disconnect()
-          self.icmpConnection = None
+        self.icmpConnection = None
     return
 
   def onCommand(self, Unit, Command, Level, Hue):
@@ -453,10 +451,7 @@ class BasePlugin:
     else:
       if (self.icmpConnection == None):
         self.icmpConnection = Domoticz.Connection(Name="LG_ICMP", Transport="ICMP/IP", Protocol="ICMP", Address=Parameters["Address"])
-        self.icmpConnection.Listen()
-      else:
-        self.Log("onHeartbeat called, send icmp PING message", 6, 1)
-        self.icmpConnection.Send("Domoticz")    
+        self.icmpConnection.Listen() 
       
     return
 
