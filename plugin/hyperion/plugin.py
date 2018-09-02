@@ -7,13 +7,23 @@
 # 1.0.0   05-08-2017  Initial version
 # 1.0.1   06-08-2017  Make priority channel configurable
 # 1.0.2   22-05-2018  Remove urllib dependancies
+# 1.0.3   20-06-2018  Solved issue with max open messages
+# 1.0.4   06-08-2018  Update logging
 
 """
-<plugin key="Hyperion" name="Hyperion" author="elgringo" version="1.0.2" externallink="https://github.com/ericstaal/domoticz/blob/master/">
+<plugin key="Hyperion" name="Hyperion" author="elgringo" version="1.0.4" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
     <param field="Address" label="IP Address" width="200px" required="true" default="192.168.13.9"/>
     <param field="Port" label="Port" width="40px" required="true" default="19444"/>
     <param field="Mode1" label="Priority channel" width="200px" default="1" />
+    <param field="Mode5" label="Disconnect after (tries)"width="50px"  required="true">
+      <options>
+        <option label="0" value="0" default="true"/>
+        <option label="1" value="1"/>
+        <option label="2" value="2"/>
+        <option label="3" value="3"/>
+      </options>
+    </param>
     <param field="Mode6" label="Debug level" width="150px">
       <options>
         <option label="0 (No logging)" value="0" default="true"/>
@@ -50,7 +60,7 @@ class BasePlugin:
   
   connection = None           # Network connection
   outstandingMessages = 0     # Open messages without reply
-  maxOutstandingMessages = 2  # lose connection after
+  maxOutstandingMessages = 0  # lose connection after
   logLevel = 0                # logLevel
   
   readata = bytearray()       # history
@@ -82,7 +92,12 @@ class BasePlugin:
     try:
       self.logLevel = int(Parameters["Mode6"])
     except:
-      self.LogError("Debuglevel '"+Parameters["Mode6"]+"' is not an integer")
+      self.Log("Debuglevel '"+Parameters["Mode6"]+"' is not an integer",1,3)
+      
+    try:
+      self.maxOutstandingMessages = int(Parameters["Mode5"])
+    except:
+      self.Log("max open messages '"+Parameters["Mode5"]+"' is not an integer",1,3)
       
     if self.logLevel == 10:
       Domoticz.Debugging(1)
@@ -92,12 +107,12 @@ class BasePlugin:
     try:
       self.priority = int(Parameters["Mode1"])
       if self.priority<0:
-        self.LogError("Priority is smaller than 0 ("+Parameters["Mode1"]+") this is not allowed, using 1 as priority")
+        self.Log("Priority is smaller than 0 ("+Parameters["Mode1"]+") this is not allowed, using 1 as priority",1,3)
         self.priority = 1
     except:
-      self.LogError("Priority '"+Parameters["Mode1"]+"' is not an integer, using 1 as priority")
+      self.Log("Priority '"+Parameters["Mode1"]+"' is not an integer, using 1 as priority",1,3)
       
-    self.LogMessage("onStart called", 9)
+    self.Log("onStart called", 9, 1)
     self.connection = Domoticz.Connection(Name="Hyperion", Transport="TCP/IP", Protocol="None", Address=Parameters["Address"], Port=Parameters["Port"])
       
     # ICONS
@@ -124,26 +139,26 @@ class BasePlugin:
         pass
       self.currentColor[i-1] = self.uiToRGB(self.dimmerValues[i-1])
       
-    self.LogMessage("Started current status: " + str(self.currentColor) + " dimmer values: " + str(self.dimmerValues), 2 )
+    self.Log("Started current status: " + str(self.currentColor) + " dimmer values: " + str(self.dimmerValues), 2, 2)
     
     self.DumpConfigToLog()
     
     return
 
   def onStop(self):
-    self.LogMessage("onStop called", 9)
+    self.Log("onStop called", 9, 1)
     
     return
 
   def onConnect(self, Connection, Status, Description):
     if (Status == 0):
-      self.LogMessage("Connected successfully to: "+Connection.Address+":"+Connection.Port, 3)
+      self.Log("Connected successfully to: "+Connection.Address+":"+Connection.Port, 3, 2)
       self.sendMessage({'command' : 'serverinfo'})
       self.errorReported = False
     else:
       if not self.errorReported:
         self.errorReported = True
-        self.LogMessage("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description, 3)
+        self.Log("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description, 3,2)
 
     return
 
@@ -221,11 +236,11 @@ class BasePlugin:
                
         if (6 in Devices):
           if Devices[6].Options != self.SourceOptions:
-            self.LogMessage("Effects have changed. Updating switch.", Level = 2)
+            self.Log("Effects have changed. Updating switch.", Level = 2, Type = 2)
             Devices[6].Delete()
             Domoticz.Device(Name="Mode", Unit=6, TypeName="Selector Switch", Switchtype=18, Used=1, Options=self.SourceOptions).Create()
         else:
-          self.LogMessage("Effects device not present add it.", Level = 2)
+          self.Log("Effects device not present add it.", Level = 2, Type = 2)
           Domoticz.Device(Name="Mode", Unit=6, TypeName="Selector Switch", Switchtype=18, Options=self.SourceOptions).Create()
       
       # actual color
@@ -247,7 +262,7 @@ class BasePlugin:
           effectactive = self.effectFileMap[dataparsed["info"]["activeEffects"]["script"]]
           
           for key, val in self.selectorMap.items():
-            self.LogMessage(str(key)+": "+str(val)+" => looking for "+ str(effectactive), 8)
+            self.Log(str(key)+": "+str(val)+" => looking for "+ str(effectactive), 8, 1)
             if (val == effectactive):
               Value = Key
               update = True
@@ -268,7 +283,7 @@ class BasePlugin:
   
   def onCommand(self, Unit, Command, Level, Hue):
     CommandStr = str(Command)
-    self.LogMessage("onCommand called for Unit " + str(Unit) + ": Parameter '" + CommandStr + "', Level: " + str(Level)+", Hue: " + str(Hue), 6)
+    self.Log("onCommand called for Unit " + str(Unit) + ": Parameter '" + CommandStr + "', Level: " + str(Level)+", Hue: " + str(Hue), 6, 1)
     
     if Unit == 6: # mode
       if ( CommandStr == "Off") or (Level == 0):
@@ -296,17 +311,17 @@ class BasePlugin:
     return
   
   def onNotification(self, Name, Subject, Text, Status, Priority, Sound, ImageFile):
-    self.LogMessage("onNotification: " + Name + "," + Subject + "," + Text + "," + Status + "," + str(Priority) + "," + Sound + "," + ImageFile, 8)
+    self.Log("onNotification: " + Name + "," + Subject + "," + Text + "," + Status + "," + str(Priority) + "," + Sound + "," + ImageFile, 8, 1)
     
     return
 
   def onDisconnect(self, Connection):
-    self.LogMessage("onDisconnect "+Connection.Address+":"+Connection.Port, 7)
+    self.Log("onDisconnect "+Connection.Address+":"+Connection.Port, 7, 2)
 
     return
 
   def onHeartbeat(self):
-    self.LogMessage("onHeartbeat called, open messages: " + str(self.outstandingMessages), 9)
+    self.Log("onHeartbeat called, open messages: " + str(self.outstandingMessages), 9, 1)
     
     self.checkConnection()
 
@@ -352,19 +367,19 @@ class BasePlugin:
         sValue = str(sValue1)+";"+str(sValue2)
         
       if (Devices[Unit].nValue != nValue) or (Devices[Unit].sValue != sValue):
-        self.LogMessage("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+":'"+str(Devices[Unit].sValue )+"') to: ("+str(nValue)+":'"+str(sValue)+"')", 5)
+        self.Log("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+":'"+str(Devices[Unit].sValue )+"') to: ("+str(nValue)+":'"+str(sValue)+"')", 5, 1)
         Devices[Unit].Update(nValue, sValue)
     return
    
   def DumpDeviceToLog(self,Unit):
-    self.LogMessage(str(Devices[Unit].ID)+":"+Devices[Unit].Name+", (n:"+str(Devices[Unit].nValue)+", s:"+Devices[Unit].sValue+", Sgl:"+str(Devices[Unit].SignalLevel)+", bl:"+str(Devices[Unit].BatteryLevel)+", img:"+ str(Devices[Unit].Image)+", typ:"+ str(Devices[Unit].Type)+", styp:"+ str(Devices[Unit].SubType)+")", 6)
+    self.Log(str(Devices[Unit].ID)+":"+Devices[Unit].Name+", (n:"+str(Devices[Unit].nValue)+", s:"+Devices[Unit].sValue+", Sgl:"+str(Devices[Unit].SignalLevel)+", bl:"+str(Devices[Unit].BatteryLevel)+", img:"+ str(Devices[Unit].Image)+", typ:"+ str(Devices[Unit].Type)+", styp:"+ str(Devices[Unit].SubType)+")", 6, 1)
     return   
     
   def DumpConfigToLog(self):
     for x in Parameters:
       if Parameters[x] != "":
-        self.LogMessage( "'" + x + "':'" + str(Parameters[x]) + "'", 7)
-    self.LogMessage("Device count: " + str(len(Devices)), 6)
+        self.Log( "'" + x + "':'" + str(Parameters[x]) + "'", 7, 1)
+    self.Log("Device count: " + str(len(Devices)), 6, 1)
     for x in Devices:
       self.DumpDeviceToLog(x)
     return
@@ -373,7 +388,7 @@ class BasePlugin:
     if self.logLevel >= Level:
       Prefix = str(Prefix)
       if isinstance(Item, dict):
-        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): ", Level)
+        self.Log(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): ", Level, 1)
         
         if len(Prefix) < 3:
           Prefix = "--> "
@@ -392,12 +407,12 @@ class BasePlugin:
         else:
           txt = "[ " 
           for b in Item:
-            txt += str(hex(b))+" "
+            txt += '0x{:02X} '.format(b)
           txt +=  "]"
         
-        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): " + txt, Level)
+        self.Log(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): " + txt, Level, 1)
       elif isinstance(Item, (tuple, list)):
-        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): ", Level)
+        self.Log(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): ", Level, 1)
         
         if len(Prefix) < 3:
           Prefix = "--> "
@@ -410,34 +425,30 @@ class BasePlugin:
           idx=idx+1
 
       elif isinstance(Item, str):
-        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): '"+Item+"'", Level)
+        self.Log(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): '"+Item+"'", Level, 1)
       else:
-        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"): "+str(Item), Level)
+        self.Log(Prefix + str(Varname) + " ("+type(Item).__name__+"): "+str(Item), Level, 1)
            
     return
 
-  def LogMessage(self, Message, Level):
-    if Level > 0:
-      if self.logLevel >= Level:
-        if self.logLevel >= 10:
-          Domoticz.Debug(Message)
-        else:
-          Domoticz.Log(Message)
-    elif (Level < 0) or (Level > 10):
-      Domoticz.Error(Message)
-      
-    return
+  def Log(self, Message, Level, Type):
+    # Message = string, Level [0-10], Type [1=Normal, 2=Status, 3=Error]
+    if self.logLevel >= Level:
+      if Type == 2:
+        Domoticz.Status(Message)
+      elif Type == 3:
+        Domoticz.Error(Message)
+      else:
+        Domoticz.Log(Message)
     
-  def LogError(self, Message):
-    self.LogMessage(Message, -1)
-    return  
+    return
     
   def stringToBase64(self, s):
     return base64.b64encode(s.encode('utf-8')).decode("utf-8")
 
   def base64ToString(self, b):
     return base64.b64decode(b).decode('utf-8')  
-      
+    
 ####################### Global functions for plugin #######################
 global _plugin
 _plugin = BasePlugin()
