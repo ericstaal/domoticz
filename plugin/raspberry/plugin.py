@@ -9,7 +9,8 @@
 # 1.0.1   31-07-2017  Updated with new API
 # 1.0.2   14-04-2018  Only update when size > 0
 # 1.0.3   06-08-2018  Update logging
-# 1.1.0   27-08-2018  Added PWM fqan control
+# 1.1.0   27-08-2018  Added PWM fan control
+# 1.1.1   02-09-2018  Repaired fan control
 
 """
 <plugin key="RaspberryInfo" name="System Status" author="elgringo" version="1.1.0" externallink="https://github.com/ericstaal/domoticz/blob/master/">
@@ -66,6 +67,8 @@
     <param field="Mode4" label="Temperature fan minimal speed" width="50px" required="true" default="30"/>
     <param field="Mode5" label="Minimal PWM step" width="50px" required="true">
       <options>
+        <option label="1" value="1"/>
+        <option label="5" value="5"/>
         <option label="10" value="10"/>
         <option label="20" value="20"/>
         <option label="50" value="50"/>
@@ -76,7 +79,7 @@
         <option label="500" value="500"/>
       </options>
     </param>
-    <param field="Mode3" label="Minimal fan speed [0-1023]" width="50px" required="true" default="100" />
+    <param field="Mode3" label="Minimal fan speed [0-1024]" width="50px" required="true" default="100" />
     <param field="Mode6" label="Debug level" width="150px">
       <options>
         <option label="0 (No logging)" value="0" default="true"/>
@@ -118,6 +121,8 @@ class BasePlugin:
   port = -1
   pwmstep = 10
   minpwm = 100
+  
+  initialized = False
  
   def onStart(self):
     try:
@@ -142,8 +147,8 @@ class BasePlugin:
 
     try:
       self.minpwm = int(Parameters["Mode3"])
-      if self.minpwm  > 1023 or self.minpwm  < 0:
-        self.Log("Minimal fan speed must be between 0 and 1023 and is "+str(self.minpwm)+", set to 100", 1, 3)   
+      if self.minpwm  > 1024 or self.minpwm  < 0:
+        self.Log("Minimal fan speed must be between 0 and 1024 and is "+str(self.minpwm)+", set to 100", 1, 3)   
         self.minpwm = 100;
     except:
       self.Log("Minimal fan speed '"+Parameters["Mode3"]+"' is not an integer", 1, 3)    
@@ -154,7 +159,7 @@ class BasePlugin:
       self.Log("Port '"+Parameters["Port"]+"' is not an integer", 1, 3)      
       
     if self.mintemperature > self.maxtemperature:
-      self.Log("Minimal temp is larger ("+str(self.mintemperature)+") than maximal temperature ("+str(self.mintemperature)+"), temperatures swapped",1, 2)  
+      self.Log("Minimal temp is larger ("+str(self.mintemperature)+") than maximal temperature ("+str(self.maxtemperature)+"), temperatures swapped",1, 2)  
       tmp = self.mintemperature
       self.mintemperature = self.maxtemperature
       self.maxtemperature = tmp
@@ -173,14 +178,13 @@ class BasePlugin:
       
     # setup GPIO
     if (self.port >= 0):
-      
-      #cmd = 'sudo gpio -g mode '+str(self.port)+' out'
-      #exitcode, out, err = self.ExecuteCommand(cmd)
-      #self.Log("Initalized fan with '"+cmd+"'", 6, 1)
+
         
       cmd = 'sudo gpio -g mode '+str(self.port)+' pwm'
       exitcode, out, err = self.ExecuteCommand(cmd)
       self.Log("Initalized fan with '"+cmd+"'", 6, 1)
+      self.Log("Fan speed ["+str(self.minpwm)+",1024] in "+str(self.pwmstep)+" step(s) between ["+str(self.mintemperature)+","+str(self.maxtemperature)+"]. Starting fan at max speed to make it rotate",1, 2)  
+      self.setPWM(1024, True)
               
     self.DumpConfigToLog()
     
@@ -266,8 +270,8 @@ class BasePlugin:
   
 ####################### Specific helper functions for plugin #######################  
   def setPWM(self, pwmvalue, force=False):
-    if pwmvalue > 1023:
-      pwmvalue = 1023
+    if pwmvalue > 1024:
+      pwmvalue = 1024
     elif pwmvalue < 0:
       pwmvalue = 0
      
@@ -277,7 +281,7 @@ class BasePlugin:
     if self.actualpwm != pwmvalue and self.port >=0:
       if (self.actualpwm + self.pwmstep) <= pwmvalue or (self.actualpwm - self.pwmstep) >= pwmvalue or force:
         # must update 
-        self.Log("Update PWM from "+str(self.actualpwm)+"/1023 to "+str(pwmvalue)+"/1023. Current temperature "+str(self.temperature), 4, 2)
+        self.Log("Update PWM from "+str(self.actualpwm)+"/1024 to "+str(pwmvalue)+"/1024. Current temperature "+str(self.temperature), 4, 2)
         self.actualpwm = pwmvalue
         
         cmd = 'sudo gpio -g pwm '+str(self.port)+' '+str(self.actualpwm)
@@ -292,12 +296,14 @@ class BasePlugin:
     if (self.temperature <= self.mintemperature):
       self.setPWM(self.minpwm, True)
     elif (self.temperature >= self.maxtemperature):
-      self.setPWM(1023, True)
+      self.setPWM(1024, True)
     else:
       deltaT = self.maxtemperature - self.mintemperature;
-      deltaPWM = 1023-self.minpwm
+      deltaPWM = 1024-self.minpwm
       
-      pwm = (deltaPWM / deltaT) * (self.temperature -self.mintemperature);
+      pwm = (deltaPWM) * ((self.temperature -self.mintemperature) / deltaT) + self.minpwm;
+      if pwm < self.minpwm:
+        pwm = self.minpwm
       self.setPWM(pwm)
 
     return
