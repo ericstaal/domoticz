@@ -8,9 +8,11 @@
 # 1.0.0   01-07-2017  Initial version
 # 1.0.1   31-07-2017  Updated with new API
 # 1.0.2   14-04-2018  Only update when size > 0
+# 1.0.3   06-08-2018  Update logging
+# 1.1.0   27-08-2018  Added PWM fqan control
 
 """
-<plugin key="RaspberryInfo" name="System Status" author="elgringo" version="1.0.2" externallink="https://github.com/ericstaal/domoticz/blob/master/">
+<plugin key="RaspberryInfo" name="System Status" author="elgringo" version="1.1.0" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
     <param field="Mode1" label="Size" width="50px" required="true">
       <options>
@@ -27,6 +29,54 @@
         <option label="60" value="60" default="true"/>
       </options>
     </param>
+    <param field="Port" label="Fan PWM pin (BCM)" width="150px" required="true">
+      <options>
+        <option label="Not connected" value="-1" default="true"/>
+        <option label="0" value="0"/>
+        <option label="1" value="1"/>
+        <option label="2" value="2"/>
+        <option label="3" value="3"/>
+        <option label="4" value="4"/>
+        <option label="5" value="5"/>
+        <option label="6" value="6"/>
+        <option label="7" value="7"/>
+        <option label="8" value="8"/>
+        <option label="9" value="9"/>
+        <option label="10" value="10"/>
+        <option label="11" value="11"/>
+        <option label="12 (hardware PWM)" value="12"/>
+        <option label="13 (hardware PWM)" value="13"/>
+        <option label="14" value="14"/>
+        <option label="15" value="15"/>
+        <option label="16" value="16"/>
+        <option label="17" value="17"/>
+        <option label="18 (hardware PWM)" value="18"/>
+        <option label="19 (hardware PWM)" value="19"/>
+        <option label="20" value="20"/>
+        <option label="21" value="21"/>
+        <option label="22" value="22"/>
+        <option label="23" value="23"/>
+        <option label="24" value="24"/>
+        <option label="25" value="25"/>
+        <option label="26" value="26"/>
+        <option label="27" value="27"/>
+      </options>
+    </param>
+    <param field="Address" label="Temperature fan maximal speed" width="50px" required="true" default="45"/>
+    <param field="Mode4" label="Temperature fan minimal speed" width="50px" required="true" default="30"/>
+    <param field="Mode5" label="Minimal PWM step" width="50px" required="true">
+      <options>
+        <option label="10" value="10"/>
+        <option label="20" value="20"/>
+        <option label="50" value="50"/>
+        <option label="100" value="100" default="true"/>
+        <option label="150" value="150"/>
+        <option label="200" value="200"/>
+        <option label="250" value="250"/>
+        <option label="500" value="500"/>
+      </options>
+    </param>
+    <param field="Mode3" label="Minimal fan speed [0-1023]" width="50px" required="true" default="100" />
     <param field="Mode6" label="Debug level" width="150px">
       <options>
         <option label="0 (No logging)" value="0" default="true"/>
@@ -54,19 +104,64 @@ from html import escape
 
 # additional imports
 import os
+from subprocess import Popen, PIPE
+import shlex
 
 class BasePlugin:
   logLevel = 0                # logLevel
+  
+  temperature = -1
+  actualpwm = -1
+  
+  maxtemperature = 45
+  mintemperature = 30
+  port = -1
+  pwmstep = 10
+  minpwm = 100
  
   def onStart(self):
     try:
       self.logLevel = int(Parameters["Mode6"])
     except:
-      self.LogError("Debuglevel '"+Parameters["Mode6"]+"' is not an integer")
+      self.Log("Debuglevel '"+Parameters["Mode6"]+"' is not an integer", 1, 3)
+    
+    try:
+      self.maxtemperature = int(Parameters["Address"])
+    except:
+      self.Log("Temperature fan maximal speed '"+Parameters["Address"]+"' is not an integer", 1, 3)
+    
+    try:
+      self.mintemperature = int(Parameters["Mode4"])      
+    except:
+      self.Log("Temperature fan minimal speed '"+Parameters["Mode4"]+"' is not an integer", 1, 3)  
+   
+    try:
+      self.pwmstep = int(Parameters["Mode5"])
+    except:
+      self.Log("Minimal PWM step '"+Parameters["Mode5"]+"' is not an integer", 1, 3)
+
+    try:
+      self.minpwm = int(Parameters["Mode3"])
+      if self.minpwm  > 1023 or self.minpwm  < 0:
+        self.Log("Minimal fan speed must be between 0 and 1023 and is "+str(self.minpwm)+", set to 100", 1, 3)   
+        self.minpwm = 100;
+    except:
+      self.Log("Minimal fan speed '"+Parameters["Mode3"]+"' is not an integer", 1, 3)    
+
+    try:
+      self.port = int(Parameters["Port"])
+    except:
+      self.Log("Port '"+Parameters["Port"]+"' is not an integer", 1, 3)      
+      
+    if self.mintemperature > self.maxtemperature:
+      self.Log("Minimal temp is larger ("+str(self.mintemperature)+") than maximal temperature ("+str(self.mintemperature)+"), temperatures swapped",1, 2)  
+      tmp = self.mintemperature
+      self.mintemperature = self.maxtemperature
+      self.maxtemperature = tmp
       
     if self.logLevel == 10:
       Domoticz.Debugging(1)
-    self.LogMessage("onStart called", 9)
+    self.Log("onStart called", 9, 1)
     
     Domoticz.Heartbeat(int(Parameters["Mode2"]))
       
@@ -76,17 +171,33 @@ class BasePlugin:
     elif 1 in Devices:
       Devices[1].Update(0, "0", Options={"Custom": ("1;" + Parameters["Mode1"])})
       
+    # setup GPIO
+    if (self.port >= 0):
+      
+      #cmd = 'sudo gpio -g mode '+str(self.port)+' out'
+      #exitcode, out, err = self.ExecuteCommand(cmd)
+      #self.Log("Initalized fan with '"+cmd+"'", 6, 1)
+        
+      cmd = 'sudo gpio -g mode '+str(self.port)+' pwm'
+      exitcode, out, err = self.ExecuteCommand(cmd)
+      self.Log("Initalized fan with '"+cmd+"'", 6, 1)
+              
     self.DumpConfigToLog()
     
     return
 
   def onStop(self):
-    self.LogMessage("onStop called", 9)
+    if self.port >= 0:
     
+      cmd = 'sudo gpio -g mode '+str(self.port)+' in'
+      exitcode, out, err = self.ExecuteCommand(cmd)
+      self.Log("Stopped: Executed command '"+cmd+"', result:"+str(exitcode), 6, 1)
+    else:
+      self.Log("Stopped", 9, 1)
     return
 
   def onConnect(self, Connection, Status, Description):
-    self.LogMessage("onConnect "+Connection.Address+":"+Connection.Port+" Status: "+ str(Status)+", Description:"+str(Description), 7)
+    self.Log("onConnect "+Connection.Address+":"+Connection.Port+" Status: "+ str(Status)+", Description:"+str(Description), 7, 1)
 
     return
 
@@ -96,22 +207,22 @@ class BasePlugin:
     return
 
   def onCommand(self, Unit, Command, Level, Hue):
-    self.LogMessage("onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level)+", Hue: " + str(Hue), 8)
+    self.Log("onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level)+", Hue: " + str(Hue), 8, 1)
     
     return
 
   def onNotification(self, Name, Subject, Text, Status, Priority, Sound, ImageFile):
-    self.LogMessage("onNotification: " + Name + "," + Subject + "," + Text + "," + Status + "," + str(Priority) + "," + Sound + "," + ImageFile, 8)
+    self.Log("onNotification: " + Name + "," + Subject + "," + Text + "," + Status + "," + str(Priority) + "," + Sound + "," + ImageFile, 8, 1)
     
     return
 
   def onDisconnect(self, Connection):
-    self.LogMessage("onDisconnect "+Connection.Address+":"+Connection.Port, 7)
+    self.Log("onDisconnect "+Connection.Address+":"+Connection.Port, 7, 1)
 
     return
 
   def onHeartbeat(self):
-    self.LogMessage("onHeartbeat called", 9)
+    self.Log("onHeartbeat called", 9, 1)
     try:
       # size
       proces = os.popen("df -k | grep -vE '^Filesystem|tmpfs|cdrom' | awk '{ print $6 \" \" $4 }'")
@@ -140,16 +251,73 @@ class BasePlugin:
       proces = os.popen("cat /sys/class/thermal/thermal_zone0/temp")
       data = proces.read()   
       proces.close()
-      temp = round(int(data) / 1000,1)
+      self.temperature = round(int(data) / 1000,1)
       
-      self.UpdateDevice(2, 0, temp)
+      self.UpdateDevice(2, 0, self.temperature )
+      
+      self.updatePWM()
         
     except Exception as e:
-      self.LogError("OnHeartbeat Error: "+ str(e))
+      self.Log("OnHeartbeat Error: "+ str(e),1,3)
       
     return
-
+    
+  
+  
 ####################### Specific helper functions for plugin #######################  
+  def setPWM(self, pwmvalue, force=False):
+    if pwmvalue > 1023:
+      pwmvalue = 1023
+    elif pwmvalue < 0:
+      pwmvalue = 0
+     
+    # whole integers only
+    pwmvalue = int(round(pwmvalue))
+    
+    if self.actualpwm != pwmvalue and self.port >=0:
+      if (self.actualpwm + self.pwmstep) <= pwmvalue or (self.actualpwm - self.pwmstep) >= pwmvalue or force:
+        # must update 
+        self.Log("Update PWM from "+str(self.actualpwm)+"/1023 to "+str(pwmvalue)+"/1023. Current temperature "+str(self.temperature), 4, 2)
+        self.actualpwm = pwmvalue
+        
+        cmd = 'sudo gpio -g pwm '+str(self.port)+' '+str(self.actualpwm)
+        exitcode, out, err = self.ExecuteCommand(cmd)
+        self.Log("Executed command '"+cmd+"'", 7, 1)
+   
+    return
+  
+  def updatePWM(self):
+    # calculates new PWM value based on temperature
+    
+    if (self.temperature <= self.mintemperature):
+      self.setPWM(self.minpwm, True)
+    elif (self.temperature >= self.maxtemperature):
+      self.setPWM(1023, True)
+    else:
+      deltaT = self.maxtemperature - self.mintemperature;
+      deltaPWM = 1023-self.minpwm
+      
+      pwm = (deltaPWM / deltaT) * (self.temperature -self.mintemperature);
+      self.setPWM(pwm)
+
+    return
+ 
+  def ExecuteCommand(self, cmd):
+    
+    args = shlex.split(cmd)
+
+    proc = Popen(args, stdout=PIPE, stderr=PIPE)
+    out, err = proc.communicate()
+    out = out.decode("utf-8") 
+    err = err.decode("utf-8") 
+    
+    exitcode = proc.returncode
+    
+    if (exitcode != 0):
+      self.Log("Failed to execute '"+cmd+"': result:"+str(exitcode)+", out:'"+out+"', err:'"+err+"'", 3, 2)
+   
+    
+    return exitcode, out, err
 
 ####################### Generic helper member functions for plugin ####################### 
   def StringToMinutes(self, value):
@@ -170,19 +338,19 @@ class BasePlugin:
         sValue = str(sValue1)+";"+str(sValue2)
         
       if (Devices[Unit].nValue != nValue) or (Devices[Unit].sValue != sValue):
-        self.LogMessage("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+":'"+str(Devices[Unit].sValue )+"') to: ("+str(nValue)+":'"+str(sValue)+"')", 5)
+        self.Log("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+":'"+str(Devices[Unit].sValue )+"') to: ("+str(nValue)+":'"+str(sValue)+"')", 5, 1)
         Devices[Unit].Update(nValue, sValue)
     return
    
   def DumpDeviceToLog(self,Unit):
-    self.LogMessage(str(Devices[Unit].ID)+":"+Devices[Unit].Name+", (n:"+str(Devices[Unit].nValue)+", s:"+Devices[Unit].sValue+", Sgl:"+str(Devices[Unit].SignalLevel)+", bl:"+str(Devices[Unit].BatteryLevel)+", img:"+ str(Devices[Unit].Image)+", typ:"+ str(Devices[Unit].Type)+", styp:"+ str(Devices[Unit].SubType)+")", 6)
+    self.Log(str(Devices[Unit].ID)+":"+Devices[Unit].Name+", (n:"+str(Devices[Unit].nValue)+", s:"+Devices[Unit].sValue+", Sgl:"+str(Devices[Unit].SignalLevel)+", bl:"+str(Devices[Unit].BatteryLevel)+", img:"+ str(Devices[Unit].Image)+", typ:"+ str(Devices[Unit].Type)+", styp:"+ str(Devices[Unit].SubType)+")", 6, 1)
     return   
     
   def DumpConfigToLog(self):
     for x in Parameters:
       if Parameters[x] != "":
-        self.LogMessage( "'" + x + "':'" + str(Parameters[x]) + "'", 7)
-    self.LogMessage("Device count: " + str(len(Devices)), 6)
+        self.Log( "'" + x + "':'" + str(Parameters[x]) + "'", 7, 1)
+    self.Log("Device count: " + str(len(Devices)), 6, 1)
     for x in Devices:
       self.DumpDeviceToLog(x)
     return
@@ -191,7 +359,7 @@ class BasePlugin:
     if self.logLevel >= Level:
       Prefix = str(Prefix)
       if isinstance(Item, dict):
-        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): ", Level)
+        self.Log(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): ", Level, 1)
         
         if len(Prefix) < 3:
           Prefix = "--> "
@@ -210,12 +378,12 @@ class BasePlugin:
         else:
           txt = "[ " 
           for b in Item:
-            txt += str(hex(b))+" "
+            txt += '0x{:02X} '.format(b)
           txt +=  "]"
         
-        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): " + txt, Level)
+        self.Log(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): " + txt, Level, 1)
       elif isinstance(Item, (tuple, list)):
-        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): ", Level)
+        self.Log(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): ", Level, 1)
         
         if len(Prefix) < 3:
           Prefix = "--> "
@@ -228,33 +396,29 @@ class BasePlugin:
           idx=idx+1
 
       elif isinstance(Item, str):
-        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): '"+Item+"'", Level)
+        self.Log(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): '"+Item+"'", Level, 1)
       else:
-        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"): "+str(Item), Level)
+        self.Log(Prefix + str(Varname) + " ("+type(Item).__name__+"): "+str(Item), Level, 1)
            
     return
 
-  def LogMessage(self, Message, Level):
-    if Level > 0:
-      if self.logLevel >= Level:
-        if self.logLevel >= 10:
-          Domoticz.Debug(Message)
-        else:
-          Domoticz.Log(Message)
-    elif (Level < 0) or (Level > 10):
-      Domoticz.Error(Message)
-      
-    return
+  def Log(self, Message, Level, Type):
+    # Message = string, Level [0-10], Type [1=Normal, 2=Status, 3=Error]
+    if self.logLevel >= Level:
+      if Type == 2:
+        Domoticz.Status(Message)
+      elif Type == 3:
+        Domoticz.Error(Message)
+      else:
+        Domoticz.Log(Message)
     
-  def LogError(self, Message):
-    self.LogMessage(Message, -1)
-    return  
+    return
     
   def stringToBase64(self, s):
     return base64.b64encode(s.encode('utf-8')).decode("utf-8")
 
   def base64ToString(self, b):
-    return base64.b64decode(b).decode('utf-8')    
+    return base64.b64decode(b).decode('utf-8')  
     
 ####################### Global functions for plugin #######################
 global _plugin
