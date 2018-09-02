@@ -13,7 +13,7 @@
 # 1.1.1   02-09-2018  Repaired fan control
 
 """
-<plugin key="RaspberryInfo" name="System Status" author="elgringo" version="1.1.0" externallink="https://github.com/ericstaal/domoticz/blob/master/">
+<plugin key="RaspberryInfo" name="System Status" author="elgringo" version="1.1.1" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
     <param field="Mode1" label="Size" width="50px" required="true">
       <options>
@@ -67,19 +67,19 @@
     <param field="Mode4" label="Temperature fan minimal speed" width="50px" required="true" default="30"/>
     <param field="Mode5" label="Minimal PWM step" width="50px" required="true">
       <options>
-        <option label="1" value="1"/>
+        <option label="1" value="1" default="true"/>
+        <option label="2" value="2"/>
         <option label="5" value="5"/>
         <option label="10" value="10"/>
         <option label="20" value="20"/>
         <option label="50" value="50"/>
-        <option label="100" value="100" default="true"/>
+        <option label="100" value="100" />
         <option label="150" value="150"/>
         <option label="200" value="200"/>
         <option label="250" value="250"/>
-        <option label="500" value="500"/>
       </options>
     </param>
-    <param field="Mode3" label="Minimal fan speed [0-1024]" width="50px" required="true" default="100" />
+    <param field="Mode3" label="Minimal fan speed [0-1024]" width="50px" required="true" default="800" />
     <param field="Mode6" label="Debug level" width="150px">
       <options>
         <option label="0 (No logging)" value="0" default="true"/>
@@ -272,8 +272,8 @@ class BasePlugin:
   def setPWM(self, pwmvalue, force=False):
     if pwmvalue > 1024:
       pwmvalue = 1024
-    elif pwmvalue < 0:
-      pwmvalue = 0
+    elif pwmvalue < self.minpwm:
+      pwmvalue = self.minpwm
      
     # whole integers only
     pwmvalue = int(round(pwmvalue))
@@ -302,8 +302,6 @@ class BasePlugin:
       deltaPWM = 1024-self.minpwm
       
       pwm = (deltaPWM) * ((self.temperature -self.mintemperature) / deltaT) + self.minpwm;
-      if pwm < self.minpwm:
-        pwm = self.minpwm
       self.setPWM(pwm)
 
     return
