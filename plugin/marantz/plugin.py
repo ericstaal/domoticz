@@ -15,12 +15,28 @@
 # 2.6.2   07-08-2017  Selector switch to buttons
 # 2.6.3   07-04-2018  Report connect error only once
 # 2.6.4   22-05-2018  Onheartbeat debug level to 8
+# 2.6.5   20-06-2018  Solved issue with max open messages
+# 2.6.6   26-06-2018  Added logging checkconnection, destroy connection when was connected
+# 2.6.7   16-07-2018  Heartbeat configurable
+# 2.6.8   06-08-2018  Update logging
 
 """
-<plugin key="DenonMarantz" name="Denon / Marantz AVR Amplifier" author="dnpwwo/artemgy/elgringo" version="2.6.4" externallink="https://github.com/ericstaal/domoticz/blob/master/">
+<plugin key="DenonMarantz" name="Denon / Marantz AVR Amplifier" author="dnpwwo/artemgy/elgringo" version="2.6.8" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
     <param field="Address" label="IP Address" width="200px" required="true" default="127.0.0.1"/>
     <param field="Port" label="Port" width="30px" required="true" default="23"/>
+      <param field="Mode1" label="Heartbeat interval" width="50px" required="true">
+      <options>
+        <option label="1" value="1"/>
+        <option label="2" value="2"/>
+        <option label="5" value="5"/>
+        <option label="8" value="8"/>
+        <option label="10" value="10" default="true"/>
+        <option label="15" value="15" />
+        <option label="20" value="20"/>
+        <option label="30" value="30"/>
+      </options>
+    </param>
     <param field="Mode2" label="Startup Delay" width="50px" required="true">
       <options>
         <option label="2" value="2"/>
@@ -34,7 +50,14 @@
     </param>
     <param field="Mode3" label="Sources" width="550px" required="true" default="Off|DVD|VDP|TV|CD|DBS|Tuner|Phono|VCR-1|VCR-2|V.Aux|CDR/Tape|AuxNet|AuxIPod"/>
     <param field="Mode4" label="Sources name" width="550px" required="true" default="Off|DVD|VDP|TV|CD|DBS|Tuner|Phono|VCR-1|VCR-2|V.Aux|CDR/Tape|AuxNet|AuxIPod"/>
-    
+    <param field="Mode5" label="Disconnect after (tries)"width="50px"  required="true">
+      <options>
+        <option label="0" value="0" default="true"/>
+        <option label="1" value="1"/>
+        <option label="2" value="2"/>
+        <option label="3" value="3"/>
+      </options>
+    </param>
     <param field="Mode6" label="Debug level" width="150px">
       <options>
         <option label="0 (No logging)" value="0" default="true"/>
@@ -67,7 +90,7 @@ class BasePlugin:
   
   connection = None           # Network connection
   outstandingMessages = 0     # Open messages without reply
-  maxOutstandingMessages = 5  # lose conenction after
+  maxOutstandingMessages = 0  # lose connection after
   logLevel = 0                # logLevel
   
   mainOn = False
@@ -84,22 +107,36 @@ class BasePlugin:
   SourceOptions = {}
   
   errorReported = False
+  wasConnected = False # check if was connected if so cdestroy the connection
   
   def checkConnection(self, checkonly = False):
     # Check connection and connect none
     isConnected = False
     
     try:
-      if not self.connection is None:
+      if self.connection is None:
+        self.connection = Domoticz.Connection(Name="Telnet", Transport="TCP/IP", Protocol="Line", Address=Parameters["Address"], Port=Parameters["Port"])
+        self.connection.Connect()
+        self.Log("checkConnection: Connection created, trying to connect", 6, 2)
+      else:
         if self.connection.Connected():
           isConnected = True
         else:
-          if (not self.connection.Connecting()) and (not checkonly):
-            self.outstandingMessages = 0
-            self.connection.Connect()
+          if self.wasConnected:
+            self.wasConnected = False
+            self.connection = None
+            self.Log("checkConnection: Connection destroyed", 6, 2)
+          else:
+            if (not self.connection.Connecting()) and (not checkonly):
+              self.outstandingMessages = 0
+              self.connection.Connect()
+              self.Log("checkConnection: Trying to connect", 6, 2)
+      
     except:
+      isConnected = False
       self.connection = None
-      self.LogError("CheckConnection error, try to reset")
+      self.wasConnected = False
+      self.Log("checkConnection: Error, try to reset",1,3)
 
     return isConnected
     
@@ -107,21 +144,26 @@ class BasePlugin:
     try:
       self.logLevel = int(Parameters["Mode6"])
     except:
-      self.LogError("Debuglevel '"+Parameters["Mode6"]+"' is not an integer")
+      self.Log("Debuglevel '"+Parameters["Mode6"]+"' is not an integer", 1, 3)
       
     if self.logLevel == 10:
       Domoticz.Debugging(1)
-    self.LogMessage("onStart called", 9)
+    self.Log("onStart called, heartbeat interval " +str(Parameters["Mode1"])+" seconds", 4, 1)
     
-    self.connection = Domoticz.Connection(Name="Telnet", Transport="TCP/IP", Protocol="Line", Address=Parameters["Address"], Port=Parameters["Port"])
+    Domoticz.Heartbeat(int(Parameters["Mode1"])) 
     
+    try:
+      self.maxOutstandingMessages = int(Parameters["Mode5"])
+    except:
+      self.Log("max open messages '"+Parameters["Mode5"]+"' is not an integer", 1, 3)
+      
     dictValue=0
     for item in Parameters["Mode3"].split('|'):
       self.selectorMap[dictValue] = item
       dictValue = dictValue + 10
         
     if (Parameters["Mode3"].count('|') != Parameters["Mode4"].count('|')):
-      self.LogError("Sources ("+Parameters["Mode3"]+") and names ("+Parameters["Mode4"]+") do not match! Using only sources")
+      self.Log("Sources ("+Parameters["Mode3"]+") and names ("+Parameters["Mode4"]+") do not match! Using only sources", 1, 3)
       
       self.SourceOptions = {'LevelActions': '|'*Parameters["Mode3"].count('|'),
                'LevelNames': Parameters["Mode3"],
@@ -139,12 +181,12 @@ class BasePlugin:
     if ("DenonMarantzboombox" not in Images): Domoticz.Image('DenonMarantzboombox.zip').Create()
     
     if (2 not in Devices): 
-      Domoticz.Device(Name="Source",     Unit=2, TypeName="Selector Switch", Switchtype=18, Image=5, Options=self.SourceOptions).Create()
+      Domoticz.Device(Name="Source", Unit=2, TypeName="Selector Switch", Switchtype=18, Image=5, Options=self.SourceOptions).Create()
       if (len(Devices[2].sValue) > 0):
         self.mainSource = int(Devices[2].sValue)
         self.mainOn = (Devices[2].nValue != 0)
     elif (Devices[2].Options != self.SourceOptions):
-      self.LogMessage("Sources or names have changed.", Level = 2)
+      self.Log("Sources or names have changed.", Level = 2, Type = 1)
       
       # update does not work, so delte it and readd it.
       Devices[2].Delete()
@@ -164,31 +206,30 @@ class BasePlugin:
     if (6 not in Devices): 
       Domoticz.Device(Name="Station",    Unit=6, Type=243, Subtype=19, Switchtype=0, Image=Images["DenonMarantzboombox"].ID).Create()
     
-    
-      
     self.DumpConfigToLog()
     
     return
 
   def onStop(self):
-    self.LogMessage("onStop called", 9)
+    self.Log("onStop called", 9, 1)
     
     return
 
   def onConnect(self, Connection, Status, Description):
     if (Status == 0):
-      self.LogMessage("Connected successfully to: "+Connection.Address+":"+Connection.Port, 2)
+      self.Log("Connected successfully to: "+Connection.Address+":"+Connection.Port, 2, 2)
+      if not self.wasConnected:
+        self.wasConnected = True
       self.connection.Send('ZM?\r')
       if self.errorReported:
         self.errorReported = False
       
     else:
       if not self.errorReported:
-        self.LogMessage("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description, 2)
+        self.Log("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description, 2, 2)
         self.SyncDevices()
         self.errorReported = True
 	  
-
     return
 
   def onMessage(self, Connection, Data):
@@ -199,7 +240,7 @@ class BasePlugin:
     strData = Data.decode("utf-8", "ignore")
         
     strData = strData.strip()
-    self.LogMessage("onMessage called: "+strData , 9)
+    self.Log("onMessage received: "+strData , 9, 1)
     action = strData[0:2]
     detail = strData[2:]
     if (action in self.pollingDict): self.lastMessage = action
@@ -229,13 +270,13 @@ class BasePlugin:
       
     else:
       if (self.ignoreMessages.find(action) < 0):
-        self.LogMessage("Unknown message '"+action+"' ignored.", 8)
+        self.Log("Unknown message '"+action+"' ignored.", 8, 1)
     self.SyncDevices()
 
     return
 
   def onCommand(self, Unit, Command, Level, Hue):
-    self.LogMessage("onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level)+", Hue: " + str(Hue), 8)
+    self.Log("onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level)+", Hue: " + str(Hue), 8, 1)
     
     Command = Command.strip()
     action, sep, params = Command.partition(' ')
@@ -246,7 +287,7 @@ class BasePlugin:
     lastHeartbeatDelta = (datetime.datetime.now()-self.lastHeartbeat).total_seconds()
     if (lastHeartbeatDelta < 0.5):
       delay = 1
-      self.LogMessage("Last heartbeat was "+str(lastHeartbeatDelta)+" seconds ago, delaying command send.", 4)
+      self.Log("Last heartbeat was "+str(lastHeartbeatDelta)+" seconds ago, delaying command send.", 4, 1)
 
     # Main Zone devices
     if self.checkConnection(True):
@@ -271,27 +312,27 @@ class BasePlugin:
     return
 
   def onNotification(self, Name, Subject, Text, Status, Priority, Sound, ImageFile):
-    self.LogMessage("onNotification: " + Name + "," + Subject + "," + Text + "," + Status + "," + str(Priority) + "," + Sound + "," + ImageFile, 8)
+    self.Log("onNotification: " + Name + "," + Subject + "," + Text + "," + Status + "," + str(Priority) + "," + Sound + "," + ImageFile, 8, 1)
     
     return
 
   def onDisconnect(self, Connection):
-    self.LogMessage("onDisconnect "+Connection.Address+":"+Connection.Port, 7)
+    self.Log("onDisconnect "+Connection.Address+":"+Connection.Port, 7, 2)
 
     return
 
   def onHeartbeat(self):
-    self.LogMessage("onHeartbeat called, open messages: " + str(self.outstandingMessages), 8)
+    self.Log("onHeartbeat called, open messages: " + str(self.outstandingMessages), 8, 1)
     if self.checkConnection(): # if false will initialize a new connection
       if (self.outstandingMessages > self.maxOutstandingMessages):
         self.connection.Disconnect()
       else:
         # send message
         self.lastHeartbeat = datetime.datetime.now()
-        self.connection.Send(self.pollingDict[self.lastMessage])
-        self.LogMessage("onHeartbeat: lastMessage "+self.lastMessage+", Sending '"+self.pollingDict[self.lastMessage][0:2]+"' Open messages: "+str(self.maxOutstandingMessages)+". ", 8)
-        
         self.outstandingMessages = self.outstandingMessages + 1
+        self.Log("onHeartbeat: lastMessage "+self.lastMessage+", Sending '"+self.pollingDict[self.lastMessage][0:2]+"'. ", 8, 1)
+        self.connection.Send(self.pollingDict[self.lastMessage])   
+        
       
     return
 
@@ -327,19 +368,19 @@ class BasePlugin:
         sValue = str(sValue1)+";"+str(sValue2)
         
       if (Devices[Unit].nValue != nValue) or (Devices[Unit].sValue != sValue):
-        self.LogMessage("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+":'"+str(Devices[Unit].sValue )+"') to: ("+str(nValue)+":'"+str(sValue)+"')", 5)
+        self.Log("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+":'"+str(Devices[Unit].sValue )+"') to: ("+str(nValue)+":'"+str(sValue)+"')", 5, 1)
         Devices[Unit].Update(nValue, sValue)
     return
    
   def DumpDeviceToLog(self,Unit):
-    self.LogMessage(str(Devices[Unit].ID)+":"+Devices[Unit].Name+", (n:"+str(Devices[Unit].nValue)+", s:"+Devices[Unit].sValue+", Sgl:"+str(Devices[Unit].SignalLevel)+", bl:"+str(Devices[Unit].BatteryLevel)+", img:"+ str(Devices[Unit].Image)+", typ:"+ str(Devices[Unit].Type)+", styp:"+ str(Devices[Unit].SubType)+")", 6)
+    self.Log(str(Devices[Unit].ID)+":"+Devices[Unit].Name+", (n:"+str(Devices[Unit].nValue)+", s:"+Devices[Unit].sValue+", Sgl:"+str(Devices[Unit].SignalLevel)+", bl:"+str(Devices[Unit].BatteryLevel)+", img:"+ str(Devices[Unit].Image)+", typ:"+ str(Devices[Unit].Type)+", styp:"+ str(Devices[Unit].SubType)+")", 6, 1)
     return   
     
   def DumpConfigToLog(self):
     for x in Parameters:
       if Parameters[x] != "":
-        self.LogMessage( "'" + x + "':'" + str(Parameters[x]) + "'", 7)
-    self.LogMessage("Device count: " + str(len(Devices)), 6)
+        self.Log( "'" + x + "':'" + str(Parameters[x]) + "'", 7, 1)
+    self.Log("Device count: " + str(len(Devices)), 6, 1)
     for x in Devices:
       self.DumpDeviceToLog(x)
     return
@@ -348,7 +389,7 @@ class BasePlugin:
     if self.logLevel >= Level:
       Prefix = str(Prefix)
       if isinstance(Item, dict):
-        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): ", Level)
+        self.Log(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): ", Level, 1)
         
         if len(Prefix) < 3:
           Prefix = "--> "
@@ -367,12 +408,12 @@ class BasePlugin:
         else:
           txt = "[ " 
           for b in Item:
-            txt += str(hex(b))+" "
+            txt += '0x{:02X} '.format(b)
           txt +=  "]"
         
-        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): " + txt, Level)
+        self.Log(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): " + txt, Level, 1)
       elif isinstance(Item, (tuple, list)):
-        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): ", Level)
+        self.Log(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): ", Level, 1)
         
         if len(Prefix) < 3:
           Prefix = "--> "
@@ -385,27 +426,23 @@ class BasePlugin:
           idx=idx+1
 
       elif isinstance(Item, str):
-        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): '"+Item+"'", Level)
+        self.Log(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): '"+Item+"'", Level, 1)
       else:
-        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"): "+str(Item), Level)
+        self.Log(Prefix + str(Varname) + " ("+type(Item).__name__+"): "+str(Item), Level, 1)
            
     return
 
-  def LogMessage(self, Message, Level):
-    if Level > 0:
-      if self.logLevel >= Level:
-        if self.logLevel >= 10:
-          Domoticz.Debug(Message)
-        else:
-          Domoticz.Log(Message)
-    elif (Level < 0) or (Level > 10):
-      Domoticz.Error(Message)
-      
-    return
+  def Log(self, Message, Level, Type):
+    # Message = string, Level [0-10], Type [1=Normal, 2=Status, 3=Error]
+    if self.logLevel >= Level:
+      if Type == 2:
+        Domoticz.Status(Message)
+      elif Type == 3:
+        Domoticz.Error(Message)
+      else:
+        Domoticz.Log(Message)
     
-  def LogError(self, Message):
-    self.LogMessage(Message, -1)
-    return  
+    return
     
   def stringToBase64(self, s):
     return base64.b64encode(s.encode('utf-8')).decode("utf-8")
