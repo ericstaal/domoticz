@@ -9,10 +9,14 @@
 # 1.0.1   31-07-2017  Updated with new API
 # 1.0.2   22-05-2018  Onheartbeat debug level to 8
 # 1.0.3   12-06-2018  Connection bugfix when set to nonen, outstanding messages cleared
-# 1.0.4   13-06-2018  CLean up code
+# 1.0.4   13-06-2018  Clean up code
+# 1.0.5   20-06-2018  Solved issue with max open messages
+# 1.0.6   03-07-2018  Fixed logging, robust for invalid messages
+# 1.0.7   08-07-2018  Report start and end of incorrect message
+# 1.0.8   06-08-2018  Update logging
 
 """
-<plugin key="Hosola_Omnik" name="Hosola / Omnik solar inverter" author="elgringo" version="1.0.4" externallink="https://github.com/ericstaal/domoticz/blob/master/">
+<plugin key="Hosola_Omnik" name="Hosola / Omnik solar inverter" author="elgringo" version="1.0.8" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
     <param field="Address" label="IP Address" width="200px" required="true" default="127.0.0.1"/>
     <param field="Port" label="Port" width="30px"  required="true" default="8899"/>
@@ -36,6 +40,9 @@
         <option label="20" value="20" />
         <option label="25" value="25"/>
         <option label="30" value="30"/>
+        <option label="40" value="40"/>
+        <option label="50" value="50"/>
+        <option label="60" value="60"/>
       </options>
     </param>
     
@@ -59,6 +66,7 @@
 """
 
 import Domoticz
+import datetime
 import collections 
 import base64
 from html import escape
@@ -69,7 +77,7 @@ class BasePlugin:
   
   connection = None           # Network connection
   outstandingMessages = 0     # Open messages without reply
-  maxOutstandingMessages = 5  # lose conenction after
+  maxOutstandingMessages = 0  # lose connection after
   logLevel = 0                # logLevel
   
   totalEnergy = 0.0           # inital values
@@ -77,6 +85,9 @@ class BasePlugin:
   readBytes = bytearray()
   
   errorReported = False
+  errorIncorrectStartReported = False
+  nofIncorrectMessages = 0
+  lastIncorrectStart = datetime.datetime.now()
   
   def checkConnection(self, checkonly = False):
     # Check connection and connect none
@@ -95,7 +106,7 @@ class BasePlugin:
         self.connection.Connect()
     except:
       self.connection = None
-      self.LogError("CheckConnection error, try to reset")
+      self.Log("CheckConnection error, try to reset",1,3)
     
     return isConnected
     
@@ -103,15 +114,13 @@ class BasePlugin:
     try:
       self.logLevel = int(Parameters["Mode6"])
     except:
-      self.LogError("Debuglevel '"+Parameters["Mode6"]+"' is not an integer")
+      self.Log("Debuglevel '"+Parameters["Mode6"]+"' is not an integer",1,3)
       
     if self.logLevel == 10:
       Domoticz.Debugging(1)
-    self.LogMessage("onStart called", 9)
+    self.Log("onStart called, heartbeat interval " +str(Parameters["Mode3"])+" seconds", 4, 1)  
     
-    #self.connection = Domoticz.Connection(Name="Hosola_OmnikBinair", Transport="TCP/IP", Protocol="None", Address=Parameters["Address"], Port=Parameters["Port"])
-      
-    maxOutstandingMessages = int(Parameters["Mode2"])
+    self.maxOutstandingMessages = int(Parameters["Mode2"])
     Domoticz.Heartbeat(int(Parameters["Mode3"])) 
     self.createInverterId()
     
@@ -126,7 +135,7 @@ class BasePlugin:
       self.totalEnergy = self.GetTotalEnergy(Devices[7].sValue)
     elif  (10 in Devices):
       self.totalEnergy = self.GetTotalEnergy(Devices[10].sValue)
-    self.LogMessage("Current total energy: "+str(self.totalEnergy), 1)
+    self.Log("Current total energy: "+str(self.totalEnergy), 1, 2)
     # id 1= temp
     # id 2= VAC phase 1
     # id 3= VDC phase 1
@@ -144,19 +153,19 @@ class BasePlugin:
     return
 
   def onStop(self):
-    self.LogMessage("onStop called", 9)
+    self.Log("onStop called", 9, 1)
     
     return
 
   def onConnect(self, Connection, Status, Description):
     if (Status == 0):
-      self.LogMessage("Connected successfully to: "+Connection.Address+":"+Connection.Port, 2)
+      self.Log("Connected successfully to: "+Connection.Address+":"+Connection.Port, 2, 2)
       self.sendNullValues()
       if self.errorReported:
         self.errorReported = False
     else:
       if not self.errorReported:
-        self.LogMessage("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description, 2)
+        self.Log("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description, 2, 2)
         self.errorReported = True
     return
 
@@ -164,10 +173,28 @@ class BasePlugin:
     self.DumpVariable(Data, "OnMessage Data")
     
     self.readBytes.extend(Data) 
+    if len(self.readBytes) > 3:
+      if (self.readBytes[0] != 0x68 or self.readBytes[1] != 0x73 or self.readBytes[2] != 0x41):
+        # incorrect message, purge it
+        self.outstandingMessages = self.outstandingMessages - 1
+        if not self.errorIncorrectStartReported:
+          self.DumpVariable(self.readBytes, "Incorrect start message purge it", Level = 4)
+          
+          self.nofIncorrectMessages = self.nofIncorrectMessages +1
+          self.lastIncorrectStart = datetime.datetime.now()
+          
+          self.Log("Incorrect message received. Occurrences: "+ str(self.nofIncorrectMessages), 3, 3)
+          self.errorIncorrectStartReported = True
+        self.readBytes.clear()
     
     if len(self.readBytes) > 155:
-      if (self.readBytes[0] == 0x68 and self.readBytes[2] == 0x41 and self.readBytes[154 ]== 0x4F and self.readBytes[155] == 0x4B): 
-        self.outstandingMessages = self.outstandingMessages - 1
+      self.outstandingMessages = self.outstandingMessages - 1
+      if (self.readBytes[154 ]== 0x4F and self.readBytes[155] == 0x4B): 
+        if self.errorIncorrectStartReported:
+          self.errorIncorrectStartReported = False
+          endtime = datetime.datetime.now()
+          self.Log("First correct message received, duration: "+ str(endtime-self.lastIncorrectStart), 3, 2)
+          
         vac = []
         vdc = []
         pac = []
@@ -186,7 +213,7 @@ class BasePlugin:
         
         #self.outstandingMessages = self.outstandingMessages - 1
         
-        self.LogMessage("VAC: "+str(vac)+" VDC: "+str(vdc)+" PAC: "+str(pac)+" Total: "+str(self.totalEnergy)+ " Temperature: "+str(temperature), 5)
+        self.Log("VAC: "+str(vac)+" VDC: "+str(vdc)+" PAC: "+str(pac)+" Total: "+str(self.totalEnergy)+ " Temperature: "+str(temperature), 5, 2)
         
         # add / update devices if needed
         for i in range(3):
@@ -207,30 +234,31 @@ class BasePlugin:
             self.UpdateDevice(unt, 0, pac[i], self.totalEnergy)
         
         self.UpdateDevice(1, 0, temperature)
-        self.readBytes.clear()
+        self.DumpVariable(self.readBytes, "Correct messsage", Level = 8)
+        self.readBytes.clear()        
         
       else:
-        self.DumpVariable(self.readBytes, "Incorrect messsage", Level = -1)
+        self.DumpVariable(self.readBytes, "Incorrect messsage", Level = 4)
         self.readBytes.clear()
     return
 
   def onCommand(self, Unit, Command, Level, Hue):
-    self.LogMessage("onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level)+", Hue: " + str(Hue), 8)
+    self.Log("onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level)+", Hue: " + str(Hue), 8, 1)
     
     return
 
   def onNotification(self, Name, Subject, Text, Status, Priority, Sound, ImageFile):
-    self.LogMessage("onNotification: " + Name + "," + Subject + "," + Text + "," + Status + "," + str(Priority) + "," + Sound + "," + ImageFile, 8)
+    self.Log("onNotification: " + Name + "," + Subject + "," + Text + "," + Status + "," + str(Priority) + "," + Sound + "," + ImageFile, 8, 1)
     
     return
 
   def onDisconnect(self, Connection):
-    self.LogMessage("onDisconnect "+Connection.Address+":"+Connection.Port, 7)
+    self.Log("onDisconnect "+Connection.Address+":"+Connection.Port, 7, 1)
 
     return
 
   def onHeartbeat(self):
-    self.LogMessage("onHeartbeat called, open messages: " + str(self.outstandingMessages), 8)
+    self.Log("onHeartbeat called, open messages: " + str(self.outstandingMessages), 7, 1)
     
     try:
       if self.checkConnection(): # checks if connect if not retry
@@ -243,7 +271,7 @@ class BasePlugin:
             if self.outstandingMessages == 1:
               self.connection.Send(self.inverterId)
     except Exception as e:
-      self.LogError("OnHeartbeat Error: "+ str(e) )
+      self.Log("OnHeartbeat Error: "+ str(e), 1, 3 )
     
     return
 
@@ -276,7 +304,7 @@ class BasePlugin:
       self.DumpVariable(self.inverterId, "Inverter ID")
       
     except:
-      self.LogError(Parameters["Mode1"]+" is not a valid serial number!")
+      self.Log(Parameters["Mode1"]+" is not a valid serial number!", 1,3)
   
   def sendNullValues(self):
     # id 1= temp
@@ -306,7 +334,7 @@ class BasePlugin:
     try:
       returnValue = float(str(sValue).split(';')[1])
     except:
-      self.LogError("could not convert "+str(sValue))
+      self.Log("could not convert "+str(sValue), 1,3)
       pass
     return returnValue
   
@@ -346,19 +374,19 @@ class BasePlugin:
         sValue = str(sValue1)+";"+str(sValue2)
         
       if (Devices[Unit].nValue != nValue) or (Devices[Unit].sValue != sValue):
-        self.LogMessage("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+":'"+str(Devices[Unit].sValue )+"') to: ("+str(nValue)+":'"+str(sValue)+"')", 5)
+        self.Log("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+":'"+str(Devices[Unit].sValue )+"') to: ("+str(nValue)+":'"+str(sValue)+"')", 5, 1)
         Devices[Unit].Update(nValue, sValue)
     return
    
   def DumpDeviceToLog(self,Unit):
-    self.LogMessage(str(Devices[Unit].ID)+":"+Devices[Unit].Name+", (n:"+str(Devices[Unit].nValue)+", s:"+Devices[Unit].sValue+", Sgl:"+str(Devices[Unit].SignalLevel)+", bl:"+str(Devices[Unit].BatteryLevel)+", img:"+ str(Devices[Unit].Image)+", typ:"+ str(Devices[Unit].Type)+", styp:"+ str(Devices[Unit].SubType)+")", 6)
+    self.Log(str(Devices[Unit].ID)+":"+Devices[Unit].Name+", (n:"+str(Devices[Unit].nValue)+", s:"+Devices[Unit].sValue+", Sgl:"+str(Devices[Unit].SignalLevel)+", bl:"+str(Devices[Unit].BatteryLevel)+", img:"+ str(Devices[Unit].Image)+", typ:"+ str(Devices[Unit].Type)+", styp:"+ str(Devices[Unit].SubType)+")", 6, 1)
     return   
     
   def DumpConfigToLog(self):
     for x in Parameters:
       if Parameters[x] != "":
-        self.LogMessage( "'" + x + "':'" + str(Parameters[x]) + "'", 7)
-    self.LogMessage("Device count: " + str(len(Devices)), 6)
+        self.Log( "'" + x + "':'" + str(Parameters[x]) + "'", 7, 1)
+    self.Log("Device count: " + str(len(Devices)), 6, 1)
     for x in Devices:
       self.DumpDeviceToLog(x)
     return
@@ -367,7 +395,7 @@ class BasePlugin:
     if self.logLevel >= Level:
       Prefix = str(Prefix)
       if isinstance(Item, dict):
-        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): ", Level)
+        self.Log(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): ", Level, 1)
         
         if len(Prefix) < 3:
           Prefix = "--> "
@@ -386,12 +414,12 @@ class BasePlugin:
         else:
           txt = "[ " 
           for b in Item:
-            txt += str(hex(b))+" "
+            txt += '0x{:02X} '.format(b)
           txt +=  "]"
         
-        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): " + txt, Level)
+        self.Log(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): " + txt, Level, 1)
       elif isinstance(Item, (tuple, list)):
-        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): ", Level)
+        self.Log(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): ", Level, 1)
         
         if len(Prefix) < 3:
           Prefix = "--> "
@@ -404,27 +432,23 @@ class BasePlugin:
           idx=idx+1
 
       elif isinstance(Item, str):
-        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): '"+Item+"'", Level)
+        self.Log(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): '"+Item+"'", Level, 1)
       else:
-        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"): "+str(Item), Level)
+        self.Log(Prefix + str(Varname) + " ("+type(Item).__name__+"): "+str(Item), Level, 1)
            
     return
 
-  def LogMessage(self, Message, Level):
-    if Level > 0:
-      if self.logLevel >= Level:
-        if self.logLevel >= 10:
-          Domoticz.Debug(Message)
-        else:
-          Domoticz.Log(Message)
-    elif (Level < 0) or (Level > 10):
-      Domoticz.Error(Message)
-      
-    return
+  def Log(self, Message, Level, Type):
+    # Message = string, Level [0-10], Type [1=Normal, 2=Status, 3=Error]
+    if self.logLevel >= Level:
+      if Type == 2:
+        Domoticz.Status(Message)
+      elif Type == 3:
+        Domoticz.Error(Message)
+      else:
+        Domoticz.Log(Message)
     
-  def LogError(self, Message):
-    self.LogMessage(Message, -1)
-    return  
+    return
     
   def stringToBase64(self, s):
     return base64.b64encode(s.encode('utf-8')).decode("utf-8")
