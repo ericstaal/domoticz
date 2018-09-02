@@ -12,10 +12,12 @@
 # History:
 # 1.0.0   01-07-2017  Initial version
 # 1.0.2   31-07-2017  Updated with new API
-# 1.0.3   22-05-2018  Onheartbeat debug level to 4=8, remove urllib for python 3.5
+# 1.0.3   22-05-2018  Onheartbeat debug level to 8, remove urllib for python 3.5
+# 1.0.4   20-06-2018  Solved issue with max open messages
+# 1.0.5   06-08-2018  Update logging
 
 """
-<plugin key="Ledenet" name="LedeNet" author="elgringo" version="1.0.3" externallink="https://github.com/ericstaal/domoticz/blob/master/">
+<plugin key="Ledenet" name="LedeNet" author="elgringo" version="1.0.5" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
     <param field="Address" label="IP Address" width="200px" required="true" default="192.168.13.80"/>
     <param field="Port" label="Port" width="30px" required="true" default="5577"/>
@@ -51,7 +53,14 @@
         <option label="30" value="30"/>
       </options>
     </param>
-    
+    <param field="Mode5" label="Disconnect after (tries)"width="50px"  required="true">
+      <options>
+        <option label="0" value="0" default="true"/>
+        <option label="1" value="1"/>
+        <option label="2" value="2"/>
+        <option label="3" value="3"/>
+      </options>
+    </param>
     <param field="Mode6" label="Debug level" width="150px">
       <options>
         <option label="0 (No logging)" value="0" default="true"/>
@@ -88,7 +97,7 @@ class BasePlugin:
   
   connection = None           # Network connection
   outstandingMessages = 0     # Open messages without reply
-  maxOutstandingMessages = 2  # lose conenction after
+  maxOutstandingMessages = 0  # lose connection after
   logLevel = 0                # logLevel
   
   commandOn = b'\x71\x23\x0F\xA3'
@@ -124,7 +133,7 @@ class BasePlugin:
           
     except:
       self.connection = None
-      self.LogError("CheckConnection error, try to reset")
+      self.Log("CheckConnection error, try to reset", 1, 3)
 
     
     return isConnected
@@ -133,15 +142,20 @@ class BasePlugin:
     try:
       self.logLevel = int(Parameters["Mode6"])
     except:
-      self.LogError("Debuglevel '"+Parameters["Mode6"]+"' is not an integer")
+      self.Log("Debuglevel '"+Parameters["Mode6"]+"' is not an integer", 1, 3)
       
     if self.logLevel == 10:
       Domoticz.Debugging(1)
     else:
       Domoticz.Heartbeat(20)
       
-    self.LogMessage("onStart called", 9)
+    self.Log("onStart called", 9, 1)
     self.connection = Domoticz.Connection(Name="LedenetBinair", Transport="TCP/IP", Protocol="None", Address=Parameters["Address"], Port=Parameters["Port"])
+      
+    try:
+      self.maxOutstandingMessages = int(Parameters["Mode5"])
+    except:
+      self.Log("max open messages '"+Parameters["Mode5"]+"' is not an integer", 1, 3)
       
     # ICONS
     if ("LedenetAutoLight" not in Images): Domoticz.Image('LedenetAutoLight.zip').Create()
@@ -173,7 +187,7 @@ class BasePlugin:
       now = datetime.now()
       sunset = self.volgendeZonondergang()
       if sunset > now:
-        self.LogMessage("Autolight enabled, while no sunset yet ("+str(sunset)+"). Disable LED after connected", 1 )
+        self.Log("Autolight enabled, while no sunset yet ("+str(sunset)+"). Disable LED after connected", 1, 2 )
         self.mustForceOff = True
             
     # set default values:
@@ -185,25 +199,25 @@ class BasePlugin:
         pass
       self.currentStatus[i] = self.uiToRGB(self.dimmerValues[i])
       
-    self.LogMessage("Started current status: " + str(self.currentStatus) + " dimmer values: " + str(self.dimmerValues), 2 )
+    self.Log("Started current status: " + str(self.currentStatus) + " dimmer values: " + str(self.dimmerValues), 2, 2 )
     
     self.DumpConfigToLog()
     
     return
 
   def onStop(self):
-    self.LogMessage("onStop called", 9)
+    self.Log("onStop called", 9, 1)
     
     return
 
   def onConnect(self, Connection, Status, Description):
     if (Status == 0):
-      self.LogMessage("Connected successfully to: "+Connection.Address+":"+Connection.Port, 3)
+      self.Log("Connected successfully to: "+Connection.Address+":"+Connection.Port, 3, 2)
       if self.mustForceOff:
         self.connection.Send(self.commandOff)
         self.mustForceOff = False
     else:
-      self.LogMessage("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description, 3)
+      self.Log("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description, 3, 2)
       self.updateDevices()
 
     return
@@ -231,8 +245,8 @@ class BasePlugin:
           self.currentStatus = tempstatus
           self.updateDevices()
           
-          status =  "ON" if self.currentStatus[0] else "OFF"
-          self.LogMessage("LedeNet changed to (R,G,B,W):(%d,%d,%d,%d) => %s" %(self.currentStatus[1],self.currentStatus[2],self.currentStatus[3], self.currentStatus[4], status), 6)
+          status = "ON" if self.currentStatus[0] else "OFF"
+          self.Log("LedeNet changed to (R,G,B,W):(%d,%d,%d,%d) => %s" %(self.currentStatus[1],self.currentStatus[2],self.currentStatus[3], self.currentStatus[4], status), 6, 2)
       else:
         self.skipStatus = False      
         
@@ -240,7 +254,7 @@ class BasePlugin:
     return
 
   def onCommand(self, Unit, Command, Level, Hue):
-    self.LogMessage("onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level)+", Hue: " + str(Hue), 8)
+    self.Log("onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level)+", Hue: " + str(Hue), 8, 1)
     
     CommandStr = str(Command)
     self.requestedStatus = self.currentStatus[:]
@@ -273,17 +287,17 @@ class BasePlugin:
     return
 
   def onNotification(self, Name, Subject, Text, Status, Priority, Sound, ImageFile):
-    self.LogMessage("onNotification: " + Name + "," + Subject + "," + Text + "," + Status + "," + str(Priority) + "," + Sound + "," + ImageFile, 8)
+    self.Log("onNotification: " + Name + "," + Subject + "," + Text + "," + Status + "," + str(Priority) + "," + Sound + "," + ImageFile, 8, 1)
     
     return
 
   def onDisconnect(self, Connection):
-    self.LogMessage("onDisconnect "+Connection.Address+":"+Connection.Port, 7)
+    self.Log("onDisconnect "+Connection.Address+":"+Connection.Port, 7, 1)
 
     return
 
   def onHeartbeat(self):
-    self.LogMessage("onHeartbeat called, open messages: " + str(self.outstandingMessages), 8)
+    self.Log("onHeartbeat called, open messages: " + str(self.outstandingMessages), 8, 1)
     
     if self.checkConnection():
       uiUpdated = False
@@ -336,7 +350,7 @@ class BasePlugin:
   def updateController(self): # send update from domtoicz to ledenet
     if self.checkConnection(True):
       updateColor = False
-      self.LogMessage("Current: " + str(self.currentStatus) + " requested: " + str(self.requestedStatus), 5)
+      self.Log("Current: " + str(self.currentStatus) + " requested: " + str(self.requestedStatus), 5, 1)
   
       for i in range(1,5):
         if self.currentStatus[i] != self.requestedStatus[i]:
@@ -409,7 +423,7 @@ class BasePlugin:
         ret = ret + timedelta(days = 1) 
       return ret
     except Exception as e:
-      self.LogError("Error retrieving Sunset: "+ str(e))
+      self.Log("Error retrieving Sunset: "+ str(e), 1, 3)
       now = datetime.now()
       return datetime(now.year, now.month, now.day, 22, 0, 0)
 
@@ -426,7 +440,7 @@ class BasePlugin:
     
     lightOn = self.volgendeZonondergang()
     # config loggen 
-    self.LogMessage("Autolight data: margin(min) " + str(marginLight) + ", Endtime(min):" + str(endtimeLight) +" ("+str(timedelta(minutes = endtimeLight))+"), switchtime ["+str(minTimeColor)+","+str(maxTimeColor)+"], Suset:"+str(lightOn), 2)
+    self.Log("Autolight data: margin(min) " + str(marginLight) + ", Endtime(min):" + str(endtimeLight) +" ("+str(timedelta(minutes = endtimeLight))+"), switchtime ["+str(minTimeColor)+","+str(maxTimeColor)+"], Suset:"+str(lightOn), 2, 2)
     margin = self.RandomNumber(0, marginLight) - (marginLight*3) / 4 # 1/4 after sunset 3/4 before sunset
     lightOn = lightOn + timedelta(minutes = margin)
     
@@ -459,7 +473,7 @@ class BasePlugin:
       date = date + delta
       break
     self.autolightDataset[date] = func
-    self.LogMessage("Autolight: " + str(date) + ", " + func.__name__, 3)
+    self.Log("Autolight: " + str(date) + ", " + func.__name__, 3, 1)
   
   def lightOn(self):
     self.lightRandomColor(False) 
@@ -475,7 +489,7 @@ class BasePlugin:
 
   def lightRandomColor(self, selfUpdate = True):
     red = self.RandomNumber(0, 255)
-    green = self.RandomNumbert(0, 255)
+    green = self.RandomNumber(0, 255)
     blue = self.RandomNumber(0, 255)
     white = self.RandomNumber(0, 40) # little less white to aad more color cahanges
     
@@ -531,19 +545,19 @@ class BasePlugin:
         sValue = str(sValue1)+";"+str(sValue2)
         
       if (Devices[Unit].nValue != nValue) or (Devices[Unit].sValue != sValue):
-        self.LogMessage("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+":'"+str(Devices[Unit].sValue )+"') to: ("+str(nValue)+":'"+str(sValue)+"')", 5)
+        self.Log("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+":'"+str(Devices[Unit].sValue )+"') to: ("+str(nValue)+":'"+str(sValue)+"')", 5, 1)
         Devices[Unit].Update(nValue, sValue)
     return
    
   def DumpDeviceToLog(self,Unit):
-    self.LogMessage(str(Devices[Unit].ID)+":"+Devices[Unit].Name+", (n:"+str(Devices[Unit].nValue)+", s:"+Devices[Unit].sValue+", Sgl:"+str(Devices[Unit].SignalLevel)+", bl:"+str(Devices[Unit].BatteryLevel)+", img:"+ str(Devices[Unit].Image)+", typ:"+ str(Devices[Unit].Type)+", styp:"+ str(Devices[Unit].SubType)+")", 6)
+    self.Log(str(Devices[Unit].ID)+":"+Devices[Unit].Name+", (n:"+str(Devices[Unit].nValue)+", s:"+Devices[Unit].sValue+", Sgl:"+str(Devices[Unit].SignalLevel)+", bl:"+str(Devices[Unit].BatteryLevel)+", img:"+ str(Devices[Unit].Image)+", typ:"+ str(Devices[Unit].Type)+", styp:"+ str(Devices[Unit].SubType)+")", 6, 1)
     return   
     
   def DumpConfigToLog(self):
     for x in Parameters:
       if Parameters[x] != "":
-        self.LogMessage( "'" + x + "':'" + str(Parameters[x]) + "'", 7)
-    self.LogMessage("Device count: " + str(len(Devices)), 6)
+        self.Log( "'" + x + "':'" + str(Parameters[x]) + "'", 7, 1)
+    self.Log("Device count: " + str(len(Devices)), 6, 1)
     for x in Devices:
       self.DumpDeviceToLog(x)
     return
@@ -552,7 +566,7 @@ class BasePlugin:
     if self.logLevel >= Level:
       Prefix = str(Prefix)
       if isinstance(Item, dict):
-        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): ", Level)
+        self.Log(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): ", Level, 1)
         
         if len(Prefix) < 3:
           Prefix = "--> "
@@ -571,12 +585,12 @@ class BasePlugin:
         else:
           txt = "[ " 
           for b in Item:
-            txt += str(hex(b))+" "
+            txt += '0x{:02X} '.format(b)
           txt +=  "]"
         
-        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): " + txt, Level)
+        self.Log(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): " + txt, Level, 1)
       elif isinstance(Item, (tuple, list)):
-        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): ", Level)
+        self.Log(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): ", Level, 1)
         
         if len(Prefix) < 3:
           Prefix = "--> "
@@ -589,43 +603,30 @@ class BasePlugin:
           idx=idx+1
 
       elif isinstance(Item, str):
-        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): '"+Item+"'", Level)
+        self.Log(Prefix + str(Varname) + " ("+type(Item).__name__+"["+str(len(Item))+"]): '"+Item+"'", Level, 1)
       else:
-        self.LogMessage(Prefix + str(Varname) + " ("+type(Item).__name__+"): "+str(Item), Level)
+        self.Log(Prefix + str(Varname) + " ("+type(Item).__name__+"): "+str(Item), Level, 1)
            
     return
 
-  def LogMessage(self, Message, Level):
-    if Level > 0:
-      if self.logLevel >= Level:
-        if self.logLevel >= 10:
-          Domoticz.Debug(Message)
-        else:
-          Domoticz.Log(Message)
-    elif (Level < 0) or (Level > 10):
-      Domoticz.Error(Message)
-      
+  def Log(self, Message, Level, Type):
+    # Message = string, Level [0-10], Type [1=Normal, 2=Status, 3=Error]
+    if self.logLevel >= Level:
+      if Type == 2:
+        Domoticz.Status(Message)
+      elif Type == 3:
+        Domoticz.Error(Message)
+      else:
+        Domoticz.Log(Message)
+    
     return
-    
-  def LogError(self, Message):
-    self.LogMessage(Message, -1)
-    return  
-    
-  def RandomNumber(self, min, max):
-    # import random causes crash :)
-    cmd = '''shuf -i %d-%d -n 1''' % (min, max) 
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
-    output = str(p.stdout.readline())
-    p.kill()
-    return int(re.findall("\d+", output)[0])
-
     
   def stringToBase64(self, s):
     return base64.b64encode(s.encode('utf-8')).decode("utf-8")
 
   def base64ToString(self, b):
     return base64.b64decode(b).decode('utf-8')  
-      
+    
 ####################### Global functions for plugin #######################
 global _plugin
 _plugin = BasePlugin()
