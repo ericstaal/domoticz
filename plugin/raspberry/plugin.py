@@ -11,9 +11,10 @@
 # 1.0.3   06-08-2018  Update logging
 # 1.1.0   27-08-2018  Added PWM fan control
 # 1.1.1   02-09-2018  Repaired fan control
+# 1.1.2   03-09-2018  Added integrator to make it more stable
 
 """
-<plugin key="RaspberryInfo" name="System Status" author="elgringo" version="1.1.1" externallink="https://github.com/ericstaal/domoticz/blob/master/">
+<plugin key="RaspberryInfo" name="System Status" author="elgringo" version="1.1.2" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
     <param field="Mode1" label="Size" width="50px" required="true">
       <options>
@@ -114,6 +115,7 @@ class BasePlugin:
   logLevel = 0                # logLevel
   
   temperature = -1
+  lasttemperature = -1
   actualpwm = -1
   
   maxtemperature = 45
@@ -121,6 +123,7 @@ class BasePlugin:
   port = -1
   pwmstep = 10
   minpwm = 100
+  maxpwm = 1024
   
   initialized = False
  
@@ -147,8 +150,8 @@ class BasePlugin:
 
     try:
       self.minpwm = int(Parameters["Mode3"])
-      if self.minpwm  > 1024 or self.minpwm  < 0:
-        self.Log("Minimal fan speed must be between 0 and 1024 and is "+str(self.minpwm)+", set to 100", 1, 3)   
+      if self.minpwm  > self.maxpwm or self.minpwm  < 0:
+        self.Log("Minimal fan speed must be between 0 and "+str(self.maxpwm)+" and is "+str(self.minpwm)+", set to 100", 1, 3)   
         self.minpwm = 100;
     except:
       self.Log("Minimal fan speed '"+Parameters["Mode3"]+"' is not an integer", 1, 3)    
@@ -183,8 +186,8 @@ class BasePlugin:
       cmd = 'sudo gpio -g mode '+str(self.port)+' pwm'
       exitcode, out, err = self.ExecuteCommand(cmd)
       self.Log("Initalized fan with '"+cmd+"'", 6, 1)
-      self.Log("Fan speed ["+str(self.minpwm)+",1024] in "+str(self.pwmstep)+" step(s) between ["+str(self.mintemperature)+","+str(self.maxtemperature)+"]. Starting fan at max speed to make it rotate",1, 2)  
-      self.setPWM(1024, True)
+      self.Log("Fan speed ["+str(self.minpwm)+","+str(self.maxpwm)+"] in "+str(self.pwmstep)+" step(s) between ["+str(self.mintemperature)+","+str(self.maxtemperature)+"]. Starting fan at max speed to make it rotate",1, 2)  
+      self.setPWM(self.maxpwm, True, -1)
               
     self.DumpConfigToLog()
     
@@ -255,6 +258,7 @@ class BasePlugin:
       proces = os.popen("cat /sys/class/thermal/thermal_zone0/temp")
       data = proces.read()   
       proces.close()
+      self.lasttemperature = self.temperature
       self.temperature = round(int(data) / 1000,1)
       
       self.UpdateDevice(2, 0, self.temperature )
@@ -269,9 +273,9 @@ class BasePlugin:
   
   
 ####################### Specific helper functions for plugin #######################  
-  def setPWM(self, pwmvalue, force=False):
-    if pwmvalue > 1024:
-      pwmvalue = 1024
+  def setPWM(self, pwmvalue, force, controltemp):
+    if pwmvalue > self.maxpwm :
+      pwmvalue = self.maxpwm 
     elif pwmvalue < self.minpwm:
       pwmvalue = self.minpwm
      
@@ -281,7 +285,7 @@ class BasePlugin:
     if self.actualpwm != pwmvalue and self.port >=0:
       if (self.actualpwm + self.pwmstep) <= pwmvalue or (self.actualpwm - self.pwmstep) >= pwmvalue or force:
         # must update 
-        self.Log("Update PWM from "+str(self.actualpwm)+"/1024 to "+str(pwmvalue)+"/1024. Current temperature "+str(self.temperature), 4, 2)
+        self.Log("Update PWM from "+str(self.actualpwm)+"/"+str(self.maxpwm )+" to "+str(pwmvalue)+"/"+str(self.maxpwm )+". Current temperature "+str(self.temperature)+", control temperature:"+str(round(controltemp*10)/10), 4, 2)
         self.actualpwm = pwmvalue
         
         cmd = 'sudo gpio -g pwm '+str(self.port)+' '+str(self.actualpwm)
@@ -293,16 +297,22 @@ class BasePlugin:
   def updatePWM(self):
     # calculates new PWM value based on temperature
     
-    if (self.temperature <= self.mintemperature):
-      self.setPWM(self.minpwm, True)
-    elif (self.temperature >= self.maxtemperature):
-      self.setPWM(1024, True)
+    if (self.lasttemperature > 0):
+      temp = (2*self.temperature+self.lasttemperature) / 3
+    else:
+      temp = self.temperature
+    
+    
+    if (temp <= self.mintemperature):
+      self.setPWM(self.minpwm, True, temp)
+    elif (temp >= self.maxtemperature):
+      self.setPWM(self.maxpwm, True, temp)
     else:
       deltaT = self.maxtemperature - self.mintemperature;
-      deltaPWM = 1024-self.minpwm
+      deltaPWM = self.maxpwm - self.minpwm
       
-      pwm = (deltaPWM) * ((self.temperature -self.mintemperature) / deltaT) + self.minpwm;
-      self.setPWM(pwm)
+      pwm = (deltaPWM) * ((temp - self.mintemperature) / deltaT) + self.minpwm;
+      self.setPWM(pwm, False, temp)
 
     return
  
