@@ -294,39 +294,42 @@ class BasePlugin:
     return
 
   def onConnect(self, Connection, Status, Description):
-    if (Status == 0):
-      self.Log("Connected successfully to: "+Connection.Address+":"+Connection.Port, 4, 2)
+    if Connection == self.connection:
       
-      # if connect we must send data
-      # depending on if a key/session/command is known
-      if (len(self.key) <= 2):
-        self.Log("Pairing key is unknown. Request pairing key (shown on TV)", 1, 2)
-        reqKey = "<!--?xml version=\"1.0\" encoding=\"utf-8\"?--><auth><type>AuthKeyReq</type></auth>"
-        self.sessionState = 0 
-        self.sendMessage(Message=reqKey, URL="/hdcp/api/auth")
+      if (Status == 0):
+        self.Log("Connected successfully to: "+Connection.Address+":"+Connection.Port, 4, 2)
         
-      else:
-        if self.session is None: # or always session id
-          pairCmd = '<?xml version="1.0" encoding="utf-8"?><auth><type>AuthReq</type><value>'+ self.key + '</value></auth>'
-          self.sessionState = 1
-          self.sendMessage(Message=pairCmd, URL="/hdcp/api/auth")
+        # if connect we must send data
+        # depending on if a key/session/command is known
+        if (len(self.key) <= 2):
+          self.Log("Pairing key is unknown. Request pairing key (shown on TV)", 1, 2)
+          reqKey = "<!--?xml version=\"1.0\" encoding=\"utf-8\"?--><auth><type>AuthKeyReq</type></auth>"
+          self.sessionState = 0 
+          self.sendMessage(Message=reqKey, URL="/hdcp/api/auth")
           
-        else: # message
-          items = len(self.queuedCommands)
-          if items > 0:
-            cmd = self.queuedCommands.pop(0)
-            self.Log("Sending command '" + cmd +"', still "+str(items-1)+" command in queue", 5, 1)
+        else:
+          if self.session is None: # or always session id
+            pairCmd = '<?xml version="1.0" encoding="utf-8"?><auth><type>AuthReq</type><value>'+ self.key + '</value></auth>'
+            self.sessionState = 1
+            self.sendMessage(Message=pairCmd, URL="/hdcp/api/auth")
             
-            cmdText = '<?xml version="1.0" encoding="utf-8"?><command><session>'+self.session+'</session><name>HandleKeyInput</name><value>'+str(self.LGCodes[cmd])+'</value></command>'
-            self.sessionState = 2
-            self.sendMessage(Message=cmdText, URL="/hdcp/api/dtv_wifirc") 
-            
-                  
+          else: # message
+            items = len(self.queuedCommands)
+            if items > 0:
+              cmd = self.queuedCommands.pop(0)
+              self.Log("Sending command '" + cmd +"', still "+str(items-1)+" command in queue", 5, 1)
+              
+              cmdText = '<?xml version="1.0" encoding="utf-8"?><command><session>'+self.session+'</session><name>HandleKeyInput</name><value>'+str(self.LGCodes[cmd])+'</value></command>'
+              self.sessionState = 2
+              self.sendMessage(Message=cmdText, URL="/hdcp/api/dtv_wifirc") 
+              
+                    
+      else:
+        self.Log("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description, 4, 2)
+        self.queuedCommands.clear() # clear send commands
+        self.session = None
     else:
-      self.Log("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description, 4, 2)
-      self.queuedCommands.clear() # clear send commands
-      self.session = None
-        
+      self.Log("Failed to connect (ICMP) ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description, 4, 2)
     return
 
   def onMessage(self, Connection, Data):
@@ -357,9 +360,11 @@ class BasePlugin:
           if self.lastState:
             Devices[1].Update( 0, "Off")
             self.lastState = False
-            
+                        
         # reset connection
-        self.icmpConnection = None
+        if self.icmpConnection != None:
+          self.icmpConnection.Disconnect()
+          self.icmpConnection = None
     return
 
   def onCommand(self, Unit, Command, Level, Hue):
@@ -452,6 +457,8 @@ class BasePlugin:
       if (self.icmpConnection == None):
         self.icmpConnection = Domoticz.Connection(Name="LG_ICMP", Transport="ICMP/IP", Protocol="ICMP", Address=Parameters["Address"])
         self.icmpConnection.Listen() 
+      else:
+        self.icmpConnection.Send("Domoticz")
       
     return
 
