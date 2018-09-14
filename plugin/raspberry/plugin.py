@@ -12,9 +12,11 @@
 # 1.1.0   27-08-2018  Added PWM fan control
 # 1.1.1   02-09-2018  Repaired fan control
 # 1.1.2   03-09-2018  Added integrator to make it more stable
+# 1.1.3   09-09-2018  Variable PWM step
+# 1.1.4   14-09-2018  PWM initialized as ms
 
 """
-<plugin key="RaspberryInfo" name="System Status" author="elgringo" version="1.1.2" externallink="https://github.com/ericstaal/domoticz/blob/master/">
+<plugin key="RaspberryInfo" name="System Status" author="elgringo" version="1.1.4" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
     <param field="Mode1" label="Size" width="50px" required="true">
       <options>
@@ -66,20 +68,7 @@
     </param>
     <param field="Address" label="Temperature fan maximal speed" width="50px" required="true" default="45"/>
     <param field="Mode4" label="Temperature fan minimal speed" width="50px" required="true" default="30"/>
-    <param field="Mode5" label="Minimal PWM step" width="50px" required="true">
-      <options>
-        <option label="1" value="1" default="true"/>
-        <option label="2" value="2"/>
-        <option label="5" value="5"/>
-        <option label="10" value="10"/>
-        <option label="20" value="20"/>
-        <option label="50" value="50"/>
-        <option label="100" value="100" />
-        <option label="150" value="150"/>
-        <option label="200" value="200"/>
-        <option label="250" value="250"/>
-      </options>
-    </param>
+    <param field="Mode5" label="Minimal PWM step" width="50px" required="true" default="2"/>
     <param field="Mode3" label="Minimal fan speed [0-1024]" width="50px" required="true" default="800" />
     <param field="Mode6" label="Debug level" width="150px">
       <options>
@@ -181,11 +170,16 @@ class BasePlugin:
       
     # setup GPIO
     if (self.port >= 0):
-
-        
-      cmd = 'sudo gpio -g mode '+str(self.port)+' pwm'
-      exitcode, out, err = self.ExecuteCommand(cmd)
-      self.Log("Initalized fan with '"+cmd+"'", 6, 1)
+   
+      cmd1 = 'gpio -g mode '+str(self.port)+' pwm'
+      cmd2 = 'gpio pwm-ms'
+      cmd3 = 'gpio pwmc 4000'
+      
+      exitcode, out, err = self.ExecuteCommand(cmd1)
+      exitcode, out, err = self.ExecuteCommand(cmd2)
+      exitcode, out, err = self.ExecuteCommand(cmd3)
+      
+      self.Log("Initialized fan with '"+cmd1+"', '"+cmd2+"', '"+cmd3+"'", 6, 2)
       self.Log("Fan speed ["+str(self.minpwm)+","+str(self.maxpwm)+"] in "+str(self.pwmstep)+" step(s) between ["+str(self.mintemperature)+","+str(self.maxtemperature)+"]. Starting fan at max speed to make it rotate",1, 2)  
       self.setPWM(self.maxpwm, True, -1)
               
@@ -196,7 +190,7 @@ class BasePlugin:
   def onStop(self):
     if self.port >= 0:
     
-      cmd = 'sudo gpio -g mode '+str(self.port)+' in'
+      cmd = 'gpio -g mode '+str(self.port)+' in'
       exitcode, out, err = self.ExecuteCommand(cmd)
       self.Log("Stopped: Executed command '"+cmd+"', result:"+str(exitcode), 6, 1)
     else:
@@ -270,8 +264,7 @@ class BasePlugin:
       
     return
     
-  
-  
+   
 ####################### Specific helper functions for plugin #######################  
   def setPWM(self, pwmvalue, force, controltemp):
     if pwmvalue > self.maxpwm :
@@ -288,7 +281,7 @@ class BasePlugin:
         self.Log("Update PWM from "+str(self.actualpwm)+"/"+str(self.maxpwm )+" to "+str(pwmvalue)+"/"+str(self.maxpwm )+". Current temperature "+str(self.temperature)+", control temperature:"+str(round(controltemp*10)/10), 4, 2)
         self.actualpwm = pwmvalue
         
-        cmd = 'sudo gpio -g pwm '+str(self.port)+' '+str(self.actualpwm)
+        cmd = 'gpio -g pwm '+str(self.port)+' '+str(self.actualpwm)
         exitcode, out, err = self.ExecuteCommand(cmd)
         self.Log("Executed command '"+cmd+"'", 7, 1)
    
@@ -298,7 +291,7 @@ class BasePlugin:
     # calculates new PWM value based on temperature
     
     if (self.lasttemperature > 0):
-      temp = (2*self.temperature+self.lasttemperature) / 3
+      temp = (3*self.temperature+2*self.lasttemperature) / 5
     else:
       temp = self.temperature
     
