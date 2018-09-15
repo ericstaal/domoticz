@@ -313,7 +313,7 @@ class BasePlugin:
         # update ui
         if (3 in Devices):
           uivalue = int(round((pwmvalue*100)/self.maxpwm))
-          self.UpdateDevice(3,1,str(uivalue))
+          self.UpdateDevice(3,2,str(uivalue))
       else:
          self.Log("PWM already set to "+str(self.actualpwm)+"/"+str(self.maxpwm ), 9, 1)
     return
