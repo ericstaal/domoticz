@@ -9,6 +9,7 @@
 # 1.0.2   22-05-2018  Remove urllib dependancies
 # 1.0.3   20-06-2018  Solved issue with max open messages
 # 1.0.4   06-08-2018  Update logging
+# 1.1.0   18-11-2018  Changed to RGB colorpicker, updated icon
 
 """
 <plugin key="Hyperion" name="Hyperion" author="elgringo" version="1.0.4" externallink="https://github.com/ericstaal/domoticz/blob/master/">
@@ -72,6 +73,7 @@ class BasePlugin:
   currentColor = [0,0,0]      # RGB
   
   dimmerValues = [0,0,0]      # values of sliders
+  masterLevel = 0 
   errorReported = False
 
   def checkConnection(self, checkonly = False):
@@ -116,29 +118,20 @@ class BasePlugin:
     self.connection = Domoticz.Connection(Name="Hyperion", Transport="TCP/IP", Protocol="None", Address=Parameters["Address"], Port=Parameters["Port"])
       
     # ICONS
-    if ("HyperionLedRed" not in Images): Domoticz.Image('HyperionLedRed.zip').Create()
-    if ("HyperionLedBlue" not in Images): Domoticz.Image('HyperionLedBlue.zip').Create()
-    if ("HyperionLedGreen" not in Images): Domoticz.Image('HyperionLedGreen.zip').Create()
+    if ("HyperionMode" not in Images): Domoticz.Image('HyperionMode.zip').Create()
 
     if (1 not in Devices):
-      Domoticz.Device(Name="Red",       Unit=1, Type=244, Subtype=73, Switchtype=7, Image=Images["HyperionLedRed"].ID).Create()
-    if (2 not in Devices):
-      Domoticz.Device(Name="Green",     Unit=2, Type=244, Subtype=73, Switchtype=7, Image=Images["HyperionLedGreen"].ID).Create()
-    if (3 not in Devices):
-      Domoticz.Device(Name="Blue",      Unit=3, Type=244, Subtype=73, Switchtype=7, Image=Images["HyperionLedBlue"].ID).Create()
-     
-    # Devices for color picking do no work since it will not return RGB / HSV values.... 
-    #Domoticz.Device(Name="RGB Light", Unit=7, Type=241, Subtype=2, Switchtype=7).Create() 
-    #Domoticz.Device(Name="Saturatie", Unit=8, Type=244, Subtype=73, Switchtype=7).Create() 
-    
-    # set default values:
-    for i in range(1,4):
+      Domoticz.Device(Name="RGB Light", Unit=1, Type=241, Subtype=2,  Switchtype=7).Create()
+    else:
       try:
-        self.dimmerValues[i-1] = int(Devices[i].sValue.strip('\''))
+        jsoncolor = json.loads(Devices[1].Color)
+        self.dimmerValues[0] = jsoncolor['r']
+        self.dimmerValues[1] = jsoncolor['g']
+        self.dimmerValues[2] = jsoncolor['b']
+        self.masterLevel = int(Devices[1].sValue)
       except:
-        pass
-      self.currentColor[i-1] = self.uiToRGB(self.dimmerValues[i-1])
-      
+        self.Log("failed to parse color:'"+Devices[1].Color+"' or sValue:'"+Devices[1].sValue+"' for level", 1, 3)
+    
     self.Log("Started current status: " + str(self.currentColor) + " dimmer values: " + str(self.dimmerValues), 2, 2)
     
     self.DumpConfigToLog()
@@ -163,32 +156,27 @@ class BasePlugin:
     return
 
   def UpdateDevices(self, Value = 10):
-    red = self.rgbToUI(self.currentColor[0])
-    if (red <= 0):
-      self.UpdateDevice(1, 0, str(red))
-    elif (red >= 100):
-      self.UpdateDevice(1, 1, str(red))
+  
+    color = json.dumps({
+      'm':3, 
+      'r':self.dimmerValues[0],
+      'g':self.dimmerValues[1],
+      'b':self.dimmerValues[2],
+      'ww':0,
+      'cw':0,
+      't':0,
+    })
+    
+    # Value 0=off, 10=rg, other is mode
+    if (Value == 0):
+      self.UpdateRGBDevice(1,0,self.masterLevel, color)
+    elif (Value == 10):
+      self.UpdateRGBDevice(1,15,self.masterLevel, color)
     else:
-      self.UpdateDevice(1, 2, str(red))
-      
-    green = self.rgbToUI(self.currentColor[1])
-    if (green <= 0):
-      self.UpdateDevice(2, 0, str(green))
-    elif (green >= 100):
-      self.UpdateDevice(2, 1, str(green))
-    else:
-      self.UpdateDevice(2, 2, str(green))
-      
-    blue = self.rgbToUI(self.currentColor[2])
-    if (blue <= 0):
-      self.UpdateDevice(3, 0, str(blue))
-    elif (blue >= 100):
-      self.UpdateDevice(3, 1, str(blue))
-    else:
-      self.UpdateDevice(3, 2, str(blue))
-      
+      self.UpdateRGBDevice(1,1,self.masterLevel, color)
+   
     #self.selectorMap[Value]
-    self.UpdateDevice(6, Value, Value)
+    self.UpdateDevice(2, Value, Value)
           
     return
   
@@ -234,14 +222,14 @@ class BasePlugin:
           dictValue = dictValue + 10
         self.DumpVariable(self.selectorMap, "SelectorMap", Level = 7, BytesAsStr = True)
                
-        if (6 in Devices):
-          if Devices[6].Options != self.SourceOptions:
+        if (2 in Devices):
+          if Devices[2].Options != self.SourceOptions:
             self.Log("Effects have changed. Updating switch.", Level = 2, Type = 2)
-            Devices[6].Delete()
-            Domoticz.Device(Name="Mode", Unit=6, TypeName="Selector Switch", Switchtype=18, Used=1, Options=self.SourceOptions).Create()
+            Devices[2].Delete()
+            Domoticz.Device(Name="Mode", Unit=2, TypeName="Selector Switch", Switchtype=18, Used=1, Options=self.SourceOptions, Image=Images["HyperionMode"].ID).Create()
         else:
           self.Log("Effects device not present add it.", Level = 2, Type = 2)
-          Domoticz.Device(Name="Mode", Unit=6, TypeName="Selector Switch", Switchtype=18, Options=self.SourceOptions).Create()
+          Domoticz.Device(Name="Mode", Unit=2, TypeName="Selector Switch", Switchtype=18, Options=self.SourceOptions, Image=Images["HyperionMode"].ID).Create()
       
       # actual color
       
@@ -269,6 +257,7 @@ class BasePlugin:
               break
           
       if (update):
+        self.updateFromDeviceStatus()
         self.UpdateDevices(Value)
     return
 
@@ -285,29 +274,41 @@ class BasePlugin:
     CommandStr = str(Command)
     self.Log("onCommand called for Unit " + str(Unit) + ": Parameter '" + CommandStr + "', Level: " + str(Level)+", Hue: " + str(Hue), 6, 1)
     
-    if Unit == 6: # mode
+    updateLevel = Level
+    
+    if Unit == 2: # mode
       if ( CommandStr == "Off") or (Level == 0):
-        #self.sendMessage({"command" : "clearall"})
-        self.sendMessage({"command" : "clear", "priority" : self.priority})
-        
-        Level = 0
+        updateLevel = 0
       elif (Level == 10):
         self.sendMessage({"command" : "color", "color": self.currentColor, "priority": self.priority})
       else:
         self.sendMessage({"command" : "effect", "effect" : {"name":self.selectorMap[Level]},"priority":self.priority})
         
-      self.UpdateDevices(Level)
+      self.UpdateDevices(updateLevel)
     else:
-      if ( CommandStr == "Off"):
-        self.currentColor[Unit-1] = self.uiToRGB(0)
-      elif ( CommandStr == "On"):
-        self.currentColor[Unit-1] = self.uiToRGB(self.dimmerValues[Unit-1])
+      updateLevel = 10
+      if (CommandStr == "Set Color" ):
+        jsoncolor = json.loads(Hue)
+        self.masterLevel = Level    
+        self.dimmerValues[0] = jsoncolor['r']
+        self.dimmerValues[1] = jsoncolor['g']
+        self.dimmerValues[2] = jsoncolor['b']
       elif ( CommandStr == "Set Level" ):
-        self.dimmerValues[Unit-1] = Level
-        self.currentColor[Unit-1] = self.uiToRGB(Level)
-      self.sendMessage({"command" : "color", "color": self.currentColor, "priority": self.priority})
-      self.UpdateDevices(10)
-   
+        self.masterLevel = Level
+      elif ( CommandStr == "Off"):
+        updateLevel = 0
+        
+      self.currentColor[0] = self.convertMasterLevel(self.dimmerValues[0])
+      self.currentColor[1] = self.convertMasterLevel(self.dimmerValues[1])
+      self.currentColor[2] = self.convertMasterLevel(self.dimmerValues[2])
+      if updateLevel > 0:
+        self.sendMessage({"command" : "color", "color": self.currentColor, "priority": self.priority})
+
+    self.UpdateDevices(updateLevel)
+    if updateLevel <= 0:
+      #self.sendMessage({"command" : "clearall"})
+      self.sendMessage({"command" : "clear", "priority" : self.priority})
+       
     return
   
   def onNotification(self, Name, Subject, Text, Status, Priority, Sound, ImageFile):
@@ -322,53 +323,59 @@ class BasePlugin:
 
   def onHeartbeat(self):
     self.Log("onHeartbeat called, open messages: " + str(self.outstandingMessages), 9, 1)
-    
     self.checkConnection()
 
     return
 
 ####################### Specific helper functions for plugin #######################    
-  def uiToRGB(self, val):
-    # Converts [0-100] => [0-255]
-    if (val >= 100):
+  def convertMasterLevel(self, val):
+    # Converts [0-255] => [0-255] time master level
+    val = val * self.masterLevel; 
+    if (val >= 25500):
       return 255;
     elif (val <= 0):
       return 0;
     else:
-      return int(round(2.55*val))
-  
-  def rgbToUI(self, val):
-    # Converts [0-255] => [0-100]
-    if (val >= 255):
-      return 100;
-    elif (val <= 0):
-      return 0;
-    else:
-      return int(round(val/2.55))
-  
+      return int(round(val/100))
+      
+  def updateFromDeviceStatus(self):
+    self.dimmerValues[0] = self.currentColor[0]
+    self.dimmerValues[1] = self.currentColor[1]
+    self.dimmerValues[2] = self.currentColor[2]
     
- 
-####################### Generic helper member functions for plugin ####################### 
-  def StringToMinutes(self, value):
-    # hh:mm
-    splitted = value.split(":")
-    if len(splitted) >= 2:
-      minutes = int(splitted[len(splitted)-1]) + int(splitted[len(splitted)-2])*60
+    max = 0
+    for i in range(3):
+      if (max < self.dimmerValues[i]):
+        max = self.dimmerValues[i]
+        
+    if (max >= 255):
+      self.masterLevel = 100 
     else:
-      minutes = int(splitted[0])
-    return minutes  
+      for i in range(3):
+        if (max > 0):
+          self.dimmerValues[i] = int(round(float(self.dimmerValues[i])*255.0/float(max)))
+      self.masterLevel = int(round((max*100.0)/255.0))
+
+####################### Generic helper member functions for plugin #######################  
    
-  def UpdateDevice(self, Unit, nValue, sValue1, sValue2 = None):
+  def UpdateRGBDevice(self, Unit, n_Value, s_Value, color):
+    # Make sure that the Domoticz device still exists (they can be deleted) before updating it 
+    if (Unit in Devices):
+      self.Log("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+":'"+str(Devices[Unit].sValue )+"':"+str(Devices[Unit].Color )+"') to: ("+str(n_Value)+":'"+str(s_Value)+"':"+str(color )+"') ", 5, 1)
+      Devices[Unit].Update(nValue=n_Value, sValue=str(s_Value), Color=color)
+    return
+    
+  def UpdateDevice(self, Unit, n_Value, sValue1, sValue2 = None):
     # Make sure that the Domoticz device still exists (they can be deleted) before updating it 
     if (Unit in Devices):
       if sValue2 is None:
-        sValue = str(sValue1)
+        s_Value = str(sValue1)
       else:
-        sValue = str(sValue1)+";"+str(sValue2)
+        s_Value = str(sValue1)+";"+str(sValue2)
         
-      if (Devices[Unit].nValue != nValue) or (Devices[Unit].sValue != sValue):
-        self.Log("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+":'"+str(Devices[Unit].sValue )+"') to: ("+str(nValue)+":'"+str(sValue)+"')", 5, 1)
-        Devices[Unit].Update(nValue, sValue)
+      if (Devices[Unit].nValue != n_Value) or (Devices[Unit].sValue != s_Value):
+        self.Log("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+":'"+str(Devices[Unit].sValue )+"') to: ("+str(n_Value)+":'"+str(s_Value)+"')", 5, 1)
+        Devices[Unit].Update(nValue=n_Value, sValue=s_Value)
     return
    
   def DumpDeviceToLog(self,Unit):
