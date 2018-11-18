@@ -15,44 +15,17 @@
 # 1.0.3   22-05-2018  Onheartbeat debug level to 8, remove urllib for python 3.5
 # 1.0.4   20-06-2018  Solved issue with max open messages
 # 1.0.5   06-08-2018  Update logging
+# 2.0.0   13-11-2018  Changed to RGBW colorpicker, added modes, updated icons
 
 """
-<plugin key="Ledenet" name="LedeNet" author="elgringo" version="1.0.5" externallink="https://github.com/ericstaal/domoticz/blob/master/">
+<plugin key="Ledenet" name="LedeNet" author="elgringo" version="2.0.0" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
     <param field="Address" label="IP Address" width="200px" required="true" default="192.168.13.80"/>
     <param field="Port" label="Port" width="30px" required="true" default="5577"/>
-    <param field="Mode1" label="Autolight light off" width="150px" required="true" default="22:45" />
-    <param field="Mode2" label="Autolight minimal time same color (minutes)" width="150px" required="true">
-      <options>
-        <option label="5" value="5"/>
-        <option label="10" value="10"/>
-        <option label="20" value="20"/>
-        <option label="30" value="30" default="true"/>
-        <option label="45" value="45"/>
-      </options>
-    </param>
-    <param field="Mode3" label="Autolight maximal same color (minutes)" width="150px" required="true">
-      <options>
-        <option label="30" value="30"/>
-        <option label="45" value="45"/>
-        <option label="60" value="60" default="true"/>
-        <option label="75" value="75"/>
-        <option label="90" value="90"/>
-        <option label="120" value="120"/>
-        <option label="240" value="240"/>
-        <option label="300" value="300"/>
-      </options>
-    </param>
-    <param field="Mode4" label="Autolight margin (minutes)" width="150px" required="true">
-      <options>
-        <option label="5" value="5"/>
-        <option label="10" value="10"/>
-        <option label="15" value="15" default="true" />
-        <option label="20" value="20"/>
-        <option label="25" value="25"/>
-        <option label="30" value="30"/>
-      </options>
-    </param>
+    <param field="Mode1" label="Custom mode 1 [R,G,B,(W)|...]" width="700px" required="true" default="200,0,0,0|200,200,0,0" />
+    <param field="Mode2" label="Custom mode 2 [R,G,B,(W)|...]" width="700px" required="true" default="50,50,50,50|60,50,40,30|10,20,30,40" />
+    <param field="Mode3" label="Custom mode 3 [R,G,B,(W)|...]" width="700px" required="true" default="100,0,0|0,100,0|0,0,100|0,0,0,100" />
+    <param field="Mode4" label="Custom mode 4 [R,G,B,(W)|...]" width="700px" required="true" default="255,255,255|0,0,0,255|0,0,0" />
     <param field="Mode5" label="Disconnect after (tries)"width="50px"  required="true">
       <options>
         <option label="0" value="0" default="true"/>
@@ -105,19 +78,23 @@ class BasePlugin:
   commandStatus = b'\x81\x8A\x8B\x96'
   
   currentStatus = [False,0,0,0,0]        # 0 = True/False (on/off), 1=Red, 2=Green, 3=Blue, 4=white, Status from the lightOn
-  requestedStatus = [False,0,0,0,0]      # from Domoticz
-  dimmerValues = [0,0,0,0,0]             # values of sliders
+  currentmode = 0x61                     # current mode static|or...
+  currentspeed = 0                       # 0x1-0x1f
+  
+  mode = 0                               # from rgb picker
+  masterLevel = 0                        # from rgb picker, master brightness (svalue)
+  dimmerValues = [0,0,0,0]               # RGBW values from control, used to determine requestedstatus
+  power = False                          # from rgb picker,
+  autospeed = 1                          # auto mode speed [1-100%] 
+  automode = 0                           # auto mode
+  custommodechanged = False
+  selectorMap = {}
+  
+  mustSendUpdate = False    # if the domotica values has been changed but not yet updated to the ledenet (connection problems)
+    
   readata = bytearray()         # history
   skipStatus = False            # when written skip next status since it can be previous value
 
-  autolight = False         # if the autolight mode is enabled
-  autolightDataset = dict() # dictionary with datimetime / functionpointer
-  mustSendUpdate = False    # if the domotica values has been changed but not yet updated to the ledenet (connection problems)
-  mustForceOff = False      # If autolight is enabled, light is on an no sunset on startup
-  
-  domoticzusername = "pi"   # needed to get sunset times
-  domoticzpassword = "pi"
-  
   def checkConnection(self, checkonly = False):
     # Check connection and connect none
     isConnected = False
@@ -158,64 +135,72 @@ class BasePlugin:
       self.Log("max open messages '"+Parameters["Mode5"]+"' is not an integer", 1, 3)
       
     # ICONS
-    if ("LedenetAutoLight" not in Images): Domoticz.Image('LedenetAutoLight.zip').Create()
-    if ("LedenetLedRed" not in Images): Domoticz.Image('LedenetLedRed.zip').Create()
-    if ("LedenetLedBlue" not in Images): Domoticz.Image('LedenetLedBlue.zip').Create()
-    if ("LedenetLedGreen" not in Images): Domoticz.Image('LedenetLedGreen.zip').Create()
-    if ("LedenetLedYellow" not in Images): Domoticz.Image('LedenetLedYellow.zip').Create()
+    if ("LedenetRGBspeed" not in Images): Domoticz.Image('LedenetRGBspeed.zip').Create()
+    if ("LedenetRGBmode" not in Images): Domoticz.Image('LedenetRGBmode.zip').Create()
     
-    # 241 = limitless, subtype 2= RGB/ 1= RGBW, switchtype 7 = philip
-    # Devices for color picking do no work since it will not return RGB / HSV values.... 
-    #Domoticz.Device(Name="RGB Light", Unit=7, Type=241, Subtype=2, Switchtype=7).Create() 
-    #Domoticz.Device(Name="Saturatie", Unit=8, Type=244, Subtype=73, Switchtype=7).Create()
     if (1 not in Devices):
-      Domoticz.Device(Name="Red",       Unit=1, Type=244, Subtype=73, Switchtype=7, Image=Images["LedenetLedRed"].ID).Create()
-    if (2 not in Devices):
-      Domoticz.Device(Name="Green",     Unit=2, Type=244, Subtype=73, Switchtype=7, Image=Images["LedenetLedGreen"].ID).Create()
-    if (3 not in Devices):
-      Domoticz.Device(Name="Blue",      Unit=3, Type=244, Subtype=73, Switchtype=7, Image=Images["LedenetLedBlue"].ID).Create()
-    if (4 not in Devices):
-      Domoticz.Device(Name="White",     Unit=4, Type=244, Subtype=73, Switchtype=7, Image=Images["LedenetLedYellow"].ID).Create()
-    if (5 not in Devices):
-      Domoticz.Device(Name="Autolight", Unit=5, TypeName="Switch", Image=Images["LedenetAutoLight"].ID).Create()
-    if (6 not in Devices):
-      Domoticz.Device(Name="Power",     Unit=6, TypeName="Switch").Create()
-      
-    # autolight is not saves in the devices itself
-    self.autolight = Devices[5].nValue != 0
-    if self.autolight:
-      now = datetime.now()
-      sunset = self.volgendeZonondergang()
-      if sunset > now:
-        self.Log("Autolight enabled, while no sunset yet ("+str(sunset)+"). Disable LED after connected", 1, 2 )
-        self.mustForceOff = True
-            
-    # set default values:
-    self.currentStatus[0] = False
-    for i in range(1,5):
+      Domoticz.Device(Name="RGB Light", Unit=1, Type=241, Subtype=6,  Switchtype=7).Create()
+    else:
       try:
-        self.dimmerValues[i] = int(Devices[i].sValue.strip('\''))
+        jsoncolor = json.loads(Devices[1].Color)
+        self.mode = int(jsoncolor['m'])
+        self.power = Devices[1].nValue > 0
+        self.dimmerValues[0] = jsoncolor['r']
+        self.dimmerValues[1] = jsoncolor['g']
+        self.dimmerValues[2] = jsoncolor['b']
+        self.dimmerValues[3] = jsoncolor['ww']
+        self.masterLevel = int(Devices[1].sValue)
       except:
-        pass
-      self.currentStatus[i] = self.uiToRGB(self.dimmerValues[i])
-      
-    self.Log("Started current status: " + str(self.currentStatus) + " dimmer values: " + str(self.dimmerValues), 2, 2 )
+        self.Log("failed to parse color:'"+Devices[1].Color+"' or sValue:'"+Devices[1].sValue+"' for level", 1, 3)
+    if (2 not in Devices):
+      Domoticz.Device(Name="Speed",Unit=2, Type=244, Subtype=73, Switchtype=7, Image=Images["LedenetRGBspeed"].ID).Create()
+    else:
+      try:
+        self.autospeed = int(Devices[2].sValue)
+      except:
+        self.Log("Failed to parse sValue:'"+Devices[1].sValue+"' for speed", 1, 3)
     
+    self.selectorMap[0] = 0x61       
+    self.selectorMap[10] = 1 
+    self.selectorMap[20] = 2
+    self.selectorMap[30] = 3
+    self.selectorMap[40] = 4
+    self.selectorMap[50] = 0x25
+    self.selectorMap[60] = 0x26
+    self.selectorMap[70] = 0x27
+    self.selectorMap[80] = 0x28
+    self.selectorMap[90] = 0x29
+    self.selectorMap[100] = 0x2A
+    self.selectorMap[110] = 0x2B
+    self.selectorMap[120] = 0x2C
+    self.selectorMap[130] = 0x2D
+    self.selectorMap[140] = 0x2E
+    self.selectorMap[150] = 0x2F
+      
+    SourceOptions = {'LevelActions': "|||||||||||||||",
+                     'LevelNames': "Static|Custom 1|Custom 2|Custom 3|Custom 4|Multi color|Red|Green|Glue|Yellow|Cyan|Purple|White|Red Green|Red Blue|Green Blue",
+                     'LevelOffHidden': 'false',
+                     'SelectorStyle': '1'}
+    
+    if (3 not in Devices):
+      Domoticz.Device(Name="Mode", Unit=3, TypeName="Selector Switch", Switchtype=18, Options=SourceOptions, Image=Images["LedenetRGBmode"].ID).Create()
+    else:
+      try:
+        self.automode = int(Devices[3].sValue)
+      except:
+        self.Log("Failed to parse sValue:'"+Devices[3].sValue+"' for automode", 1, 3)
+   
     self.DumpConfigToLog()
     
     return
 
   def onStop(self):
     self.Log("onStop called", 9, 1)
-    
     return
 
   def onConnect(self, Connection, Status, Description):
     if (Status == 0):
       self.Log("Connected successfully to: "+Connection.Address+":"+Connection.Port, 3, 2)
-      if self.mustForceOff:
-        self.connection.Send(self.commandOff)
-        self.mustForceOff = False
     else:
       self.Log("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description, 3, 2)
       self.updateDevices()
@@ -223,7 +208,7 @@ class BasePlugin:
     return
 
   def onMessage(self, Connection, Data):
-    self.DumpVariable(Data, "OnMessage Data")
+    self.DumpVariable(Data, "OnMessage Data", Level=8)
 
     # only listen to the status, all other are not needed
     if (Data[0]==0x81 and len(self.readata) == 0):
@@ -236,17 +221,39 @@ class BasePlugin:
       if not self.skipStatus:
         tempstatus = [0,0,0,0,0]
         tempstatus[0] = (self.readata[2] == 0x23) # 0x23 is ON, 0x24 is OFF
+        tempmode = self.readata[3]
+        tempspeed = self.readata[5]
         tempstatus[1] = self.readata[6] # Red
         tempstatus[2] = self.readata[7] # Green
         tempstatus[3] = self.readata[8] # Blue
         tempstatus[4] = self.readata[9] # White
-        if (tempstatus != self.currentStatus):
-          # values are different than know, update the UI
-          self.currentStatus = tempstatus
-          self.updateDevices()
+
+        adjcurrentmode = self.currentmode
+        if adjcurrentmode < 10:
+          adjcurrentmode = 0x60
           
-          status = "ON" if self.currentStatus[0] else "OFF"
-          self.Log("LedeNet changed to (R,G,B,W):(%d,%d,%d,%d) => %s" %(self.currentStatus[1],self.currentStatus[2],self.currentStatus[3], self.currentStatus[4], status), 6, 2)
+        if (tempmode == 0x61):
+          if (tempstatus != self.currentStatus or tempmode != self.currentmode or tempspeed != self.currentspeed):
+            self.Log("LedeNet changed R:%d, G:%d, B:%d, W:%d, Speed:0x%X, Mode:0x%X, pwr:%d => R:%d, G:%d, B:%d, W:%d, Speed:0x%X, Mode:0x%X, pwr:%d" %
+            (self.currentStatus[1],self.currentStatus[2],self.currentStatus[3], self.currentStatus[4], self.currentspeed, self.currentmode, self.currentStatus[0], tempstatus[1], tempstatus[2], tempstatus[3], tempstatus[4],tempspeed, tempmode,tempstatus[0]), 6, 2)
+                    
+            self.currentStatus = tempstatus
+            self.currentmode = tempmode
+            self.currentspeed = tempspeed
+            
+            self.updateFromDeviceStatus()
+
+            
+        elif (tempstatus[0] != self.currentStatus[0] or tempmode != adjcurrentmode or tempspeed != self.currentspeed):
+          self.Log("LedeNet changed Speed:0x%X, Mode:0x%X, pwr:%d => Speed:0x%X, Mode:0x%X, pwr:%d" %
+          (self.currentspeed, self.currentmode, self.currentStatus[0], tempspeed, tempmode, tempstatus[0]), 6, 2)
+          
+          self.currentStatus[0] = tempstatus[0]
+          self.currentmode = tempmode
+          self.currentspeed = tempspeed
+          
+          self.updateFromDeviceStatus()
+      
       else:
         self.skipStatus = False      
         
@@ -254,33 +261,51 @@ class BasePlugin:
     return
 
   def onCommand(self, Unit, Command, Level, Hue):
-    self.Log("onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level)+", Hue: " + str(Hue), 8, 1)
+    self.Log("onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level)+", Hue: " + str(Hue), 7, 1)
     
     CommandStr = str(Command)
     self.requestedStatus = self.currentStatus[:]
+    
     # Calculate color and send update to devices
     if ( CommandStr == "Off"):
-      if (Unit < 5 ):
-        self.requestedStatus[Unit] = self.uiToRGB(0)
-      elif (Unit == 6):
-        self.requestedStatus[0] = False
-      elif (Unit ==5): # autolight
-        self.autolightDataset.clear() # Clear also dictionary with toggle values
-        self.autolight = False
+      if (Unit == 1):
+        self.power = False
+      elif (Unit == 2):
+        self.autospeed = 1
+      elif (Unit == 3):
+        self.automode = 0x61
     elif ( CommandStr == "On"):
-      if (Unit < 5):
-        self.requestedStatus[Unit] = self.uiToRGB(self.dimmerValues[Unit])
-      elif (Unit == 6):
-        self.requestedStatus[0] = True
-      elif (Unit ==5): # autolight
-        self.autolight = True
+      if (Unit == 1):
+        self.power = True
     elif ( CommandStr == "Set Level" ):
-      if (Unit < 5):
-        self.dimmerValues[Unit] = Level
-        self.requestedStatus[Unit] = self.uiToRGB(Level)
-    
+      if (Unit == 1):
+        self.masterLevel = Level
+        self.power = Level > 0
+        if (self.power):
+          self.automode = 0x61
+      elif (Unit == 2):
+        if Level <= 0:
+          self.autospeed = 1
+        else:
+          self.autospeed = Level 
+      elif (Unit == 3):
+        self.automode = self.selectorMap[Level]
+        if (self.automode <= 10):
+          self.custommodechanged = True
+    elif (CommandStr == "Set Color" ):
+      if (Unit == 1):
+        jsoncolor = json.loads(Hue)
+        self.masterLevel = Level    
+        self.dimmerValues[0] = jsoncolor['r']
+        self.dimmerValues[1] = jsoncolor['g']
+        self.dimmerValues[2] = jsoncolor['b']
+        self.dimmerValues[3] = jsoncolor['ww']
+        self.mode = int( jsoncolor['m'] )
+        self.automode = 0x61
+
     # update controler
     self.updateController()
+    
     # update UI
     self.updateDevices()
     
@@ -293,260 +318,253 @@ class BasePlugin:
 
   def onDisconnect(self, Connection):
     self.Log("onDisconnect "+Connection.Address+":"+Connection.Port, 7, 1)
-
     return
 
   def onHeartbeat(self):
     self.Log("onHeartbeat called, open messages: " + str(self.outstandingMessages), 8, 1)
     
     if self.checkConnection():
-      uiUpdated = False
-      if self.autolight:
-        if (len(self.autolightDataset) == 0): 
-          self.generateAutolightData() # when empty create new dataset
-      
-        now = datetime.now()
-        sortedkeys = sorted(self.autolightDataset.keys())
-        key = sortedkeys[0]
-    
-        now = datetime.now()
-        if key <= now:
-          self.autolightDataset[key]()
-          del self.autolightDataset[key] 
-          uiUpdated = True
-      
-      if (not uiUpdated):
-        if (self.outstandingMessages > self.maxOutstandingMessages):
-          self.connection.Disconnect()
+      if (self.outstandingMessages > self.maxOutstandingMessages):
+        self.connection.Disconnect()
+      else:
+        if self.mustSendUpdate:
+          self.updateController()
         else:
-          if self.mustSendUpdate:
-            self.updateController()
-          else:
-            self.readata.clear()
-            self.connection.Send(self.commandStatus)
-            self.outstandingMessages = self.outstandingMessages + 1
+          self.readata.clear()
+          self.connection.Send(self.commandStatus)
+          self.outstandingMessages = self.outstandingMessages + 1
            
     return
 
 ####################### Specific helper functions for plugin #######################    
-  def uiToRGB(self, val):
-    # Converts [0-100] => [0-255]
-    if (val >= 100):
+  def updateFromDeviceStatus(self):
+    # convert function
+    self.dimmerValues[0] = self.currentStatus[1]
+    self.dimmerValues[1] = self.currentStatus[2]
+    self.dimmerValues[2] = self.currentStatus[3]
+    self.dimmerValues[3] = self.currentStatus[4]
+    self.power = self.currentStatus[0]
+    self.autospeed = int(round((30 - (self.currentspeed - 1))*3.3))+1 
+    
+    if not self.power:
+      self.automode = 0x61
+    elif self.currentmode < 10:
+      self.automode = 1 # custom mode, use the first one
+    else:
+      self.automode = self.currentmode
+
+    if self.automode == 0x61:
+      if (self.dimmerValues[0] > 0 or self.dimmerValues[1] > 0 or self.dimmerValues[2] > 0):
+        if (self.dimmerValues[3] > 0):
+          self.mode = 4
+        else:
+          self.mode = 3
+      else:
+        self.mode = 1
+    
+    if (self.mode == 1):
+      self.masterLevel = int(round((self.dimmerValues[3]*100.0) / 255.0)) 
+      self.dimmerValues[3] = 255
+    else:
+      max = 0
+      for i in range(4):
+        if (max < self.dimmerValues[i]):
+          max = self.dimmerValues[i]
+          
+      if (max >= 255):
+        self.masterLevel = 100 
+      else:
+        for i in range(4):
+          if (max > 0):
+            self.dimmerValues[i] = int(round(float(self.dimmerValues[i])*255.0/float(max)))
+        self.masterLevel = int(round((max*100.0)/255.0))
+      
+    self.updateDevices()
+    return
+  
+  def convertMasterLevel(self, val):
+    # Converts [0-255] => [0-255] time master level
+    val = val * self.masterLevel; 
+    if (val >= 25500):
       return 255;
     elif (val <= 0):
       return 0;
     else:
-      return int(round(2.55*val))
+      return int(round(val/100))
   
-  def rgbToUI(self, val):
-    # Converts [0-255] => [0-100]
-    if (val >= 255):
-      return 100;
-    elif (val <= 0):
-      return 0;
-    else:
-      return int(round(val/2.55))
-  
+  def programCustom(self, custommode):
+    if self.custommodechanged:
+      customdata = ""
+      msg = [0x51]
+      if custommode == 4:
+        customdata = Parameters["Mode4"]
+      elif  custommode == 3:
+        customdata = Parameters["Mode3"]
+      elif  custommode == 2:
+        customdata = Parameters["Mode2"]
+      else:
+        customdata = Parameters["Mode1"]
+       
+      customsplitdata = customdata.split("|")
+      error = False
+      for i in range(0,16):
+        if (i < len(customsplitdata)):
+          colorsplit = customsplitdata[i].split(",")
+          for j in range(0,4):
+            val = j +1
+            if (val == 4):
+              val = 0
+            
+            if j < len(colorsplit):
+              try:
+                val = int(colorsplit[j])
+              except:
+                error = True
+            msg.append(val)
+        else:
+          msg.extend([1,2,3,0])
+      
+      msg.extend([self.currentspeed, 0x3A, 0xFF, 0x0F])
+      
+      if error:
+        self.Log("Failed to parse custom mode "+str(custommode)+", '"+customdata+"'", 1, 3)
+      else:
+        self.Log("Set custom mode "+str(custommode)+", '"+customdata+"'", 4, 1)
+      checksum = 0
+      for itm in msg:
+        checksum = checksum + itm
+      checksum = checksum % 0x100
+      msg.append(checksum)
+      
+    
+      msgbytes = bytes(msg)
+      self.connection.Send(msgbytes)
+      self.DumpVariable(msgbytes, "Send custom mode message", Level=8)
+      self.custommodechanged = False
+      return True
+    return False
+    
   def updateController(self): # send update from domtoicz to ledenet
     if self.checkConnection(True):
       updateColor = False
-      self.Log("Current: " + str(self.currentStatus) + " requested: " + str(self.requestedStatus), 5, 1)
+      requestedStatus = self.currentStatus[:]
+      requestedStatus[0] = self.power
+      
+      if (self.mode == 3 or self.mode == 4):
+        requestedStatus[1] = self.convertMasterLevel( self.dimmerValues[0] )
+        requestedStatus[2] = self.convertMasterLevel( self.dimmerValues[1] )
+        requestedStatus[3] = self.convertMasterLevel( self.dimmerValues[2] )
+      else:
+        requestedStatus[1] = 0
+        requestedStatus[2] = 0
+        requestedStatus[3] = 0
+      if (self.mode == 1 or self.mode == 4):
+        requestedStatus[4] = self.convertMasterLevel( self.dimmerValues[3] )
+      else:
+        requestedStatus[4] = 0
+      self.Log("Current: " + str(self.currentStatus) + " requested: " + str(requestedStatus), 7, 1)
   
       for i in range(1,5):
-        if self.currentStatus[i] != self.requestedStatus[i]:
+        if self.currentStatus[i] != requestedStatus[i]:
           updateColor = True
           break
       
       # update color
       if updateColor:
-        checksum = (self.requestedStatus[1] + self.requestedStatus[2] + self.requestedStatus[3] + 0x3F +(self.requestedStatus[4] - 0xFF)) % 0x100
-        msg = bytes([0x31, self.requestedStatus[1], self.requestedStatus[2], self.requestedStatus[3], self.requestedStatus[4], 0x00, 0x0F, checksum])
+        checksum = (requestedStatus[1] + requestedStatus[2] + requestedStatus[3] + 0x3F +(requestedStatus[4] - 0xFF)) % 0x100
+        msg = bytes([0x31, requestedStatus[1], requestedStatus[2], requestedStatus[3], requestedStatus[4], 0x00, 0x0F, checksum])
         self.connection.Send(msg)
-        self.DumpVariable(msg, "Send message")
+        self.DumpVariable(msg, "Send color message", Level=8)
         self.skipStatus = True
       
       # update power
-      if (self.currentStatus[0] != self.requestedStatus[0]):
-        if self.requestedStatus[0]:
+      if (self.currentStatus[0] != requestedStatus[0]):
+        if requestedStatus[0]:
           self.connection.Send(self.commandOn)
           self.skipStatus = True
         else:
           self.connection.Send(self.commandOff)
           self.skipStatus = True
         
+      #mode & speed
+      newspeed = int(round((100.0 - self.autospeed)/3.3))+1
+      if newspeed > 0x1F:
+        newspeed = 0x1F
+      elif newspeed < 0x01:
+        newspeed = 0x01
+       
+      if (self.currentmode != self.automode or self.currentspeed != newspeed):
+        self.Log("Speed level:%d speed changed from:0x%X to 0x%X Mode changed from:0x%X to 0x%X"% (self.autospeed, self.currentspeed, newspeed, self.currentmode, self.automode ), 6, 1)
+        self.currentmode = self.automode
+        if self.currentmode < 10:
+          self.currentmode = 0x60
+        self.currentspeed = newspeed
+        
+        if (self.automode <= 10):
+          self.programCustom(self.automode)
+        else:
+          # predefined
+          checksum = (0x61 + self.currentmode + self.currentspeed + 0x0F ) % 0x100
+        
+          msg = bytes([0x61, self.currentmode, self.currentspeed, 0x0F, checksum])
+          self.connection.Send(msg)
+          self.DumpVariable(msg, "Send mode message", Level=8)
+          self.skipStatus = True
+                
       # reset status
-      self.currentStatus = self.requestedStatus[:]
+      self.currentStatus = requestedStatus[:]
       self.mustSendUpdate = False
     else:
       self.mustSendUpdate = True
     
   def updateDevices(self): # updates devices based on the curent values
-    if ((Devices[6].nValue != 0) != self.currentStatus[0]):
-      if (self.currentStatus[0]):
-        self.UpdateDevice(6,1,"On")
+    color = json.dumps({
+      'm':self.mode, 
+      'r':self.dimmerValues[0],
+      'g':self.dimmerValues[1],
+      'b':self.dimmerValues[2],
+      'ww':self.dimmerValues[3],
+      'cw':0,
+      't':0,
+    })
+    
+    # 0 = off, 1 = on, 15=%
+    for key, value in self.selectorMap.items():
+      if (value == self.automode):
+        self.UpdateDevice(3,key,key)
+        break
+    
+    if self.power:
+      if self.automode == 0x61:
+        self.UpdateRGBDevice(1,15,self.masterLevel, color)
       else:
-        self.UpdateDevice(6,0,"Off")
-        
-    if ((Devices[5].nValue != 0) != self.autolight):
-      if (self.autolight):
-        self.UpdateDevice(5,1,"On")
-      else:
-        self.UpdateDevice(5,0,"Off")        
-    
-    for i in range(1,5):
-      val = self.rgbToUI(self.currentStatus[i]) 
-      if (self.currentStatus[i] == 0):
-        self.UpdateDevice(i,0,str(self.dimmerValues[i]))
-      elif (val == 100):
-        self.UpdateDevice(i,1,str(val))
-      else:
-        self.UpdateDevice(i,2,str(val))
- 
-  def volgendeZonondergang(self):
-    # sunrise from domoticz... But I don't know how to retrieve it....
-    
-    try:
-      cmd = '''curl -s --connect-timeout 2 --max-time 5 "Accept: application/json" "http://%s:%s@127.0.0.1:8080/json.htm?type=command&param=getSunRiseSet" | grep "Sunset"''' % (self.domoticzusername, self.domoticzpassword) 
-      p = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
-      output = str(p.stdout.readline())
-      p.kill()
-      time = output[output.find('''" : "''')+5:]
-      time = time[0:time.find('''"''')]
-      
-      timesplit = time.split(':')
-    
-      now = datetime.now()
-      ret = datetime(now.year, now.month, now.day, int(timesplit[0]), int(timesplit[1]), 0)
-      # when started after sunset use 'now'
-      now = now + timedelta(minutes = int(Parameters["Mode4"])) 
-      if (now > ret):
-        ret = ret + timedelta(days = 1) 
-      return ret
-    except Exception as e:
-      self.Log("Error retrieving Sunset: "+ str(e), 1, 3)
-      now = datetime.now()
-      return datetime(now.year, now.month, now.day, 22, 0, 0)
-
-  def generateAutolightData(self):
-    # Fills dataset based on parameters. It will be stored in a dictionary (key is datetime, value is function pointer). 
-    # When time is passed the function is executed (heartbeat) and removed from dictionary. 
-    # When empty it will be refilled for the next day
-    
-    # Fill datatset
-    marginLight = int(Parameters["Mode4"])
-    endtimeLight = self.StringToMinutes(Parameters["Mode1"])
-    minTimeColor = int(Parameters["Mode2"])
-    maxTimeColor = int(Parameters["Mode3"])
-    
-    lightOn = self.volgendeZonondergang()
-    # config loggen 
-    self.Log("Autolight data: margin(min) " + str(marginLight) + ", Endtime(min):" + str(endtimeLight) +" ("+str(timedelta(minutes = endtimeLight))+"), switchtime ["+str(minTimeColor)+","+str(maxTimeColor)+"], Suset:"+str(lightOn), 2, 2)
-    margin = self.RandomNumber(0, marginLight) - (marginLight*3) / 4 # 1/4 after sunset 3/4 before sunset
-    lightOn = lightOn + timedelta(minutes = margin)
-    
-    # create record
-    if Parameters["Mode6"] == "10":
-      lightOn = datetime.now()+ timedelta(seconds=10) # prevent waiting :)
-      minTimeColor = 1 
-      maxTimeColor = 3
-      
-    margin = self.RandomNumber(0, marginLight) - marginLight / 2 + endtimeLight
-    lightOff = datetime(lightOn.year, lightOn.month, lightOn.day) + timedelta(minutes = margin)
-    if ((Parameters["Mode6"] == "10") or (lightOn > lightOff)):
-      lightOff = lightOn+timedelta(minutes=10)
-      
-    self.addRecord(lightOn, self.lightOn)
-    switchTime = lightOn
-    
-    # Add color changes
-    while switchTime < lightOff:
-      margin = self.RandomNumber(minTimeColor, maxTimeColor)
-      switchTime = switchTime + timedelta(minutes = margin)
-      if (switchTime < lightOff):
-        self.addRecord(switchTime, self.lightRandomColor)
-        
-    self.addRecord(lightOff, self.lightOff)
-          
-  def addRecord(self, date, func):
-    delta = timedelta(milliseconds = 1)
-    while date in self.autolightDataset.keys():
-      date = date + delta
-      break
-    self.autolightDataset[date] = func
-    self.Log("Autolight: " + str(date) + ", " + func.__name__, 3, 1)
-  
-  def lightOn(self):
-    self.lightRandomColor(False) 
-    self.requestedStatus[0] = True
-    self.updateController()
-    self.updateDevices()
-    
-  def lightOff(self):
-    self.requestedStatus[0] = False
-    self.updateController()
-    self.updateDevices()
-    self.generateAutolightData() # Finished generate new data
-
-  def lightRandomColor(self, selfUpdate = True):
-    red = self.RandomNumber(0, 255)
-    green = self.RandomNumber(0, 255)
-    blue = self.RandomNumber(0, 255)
-    white = self.RandomNumber(0, 40) # little less white to aad more color cahanges
-    
-    minBrightness = 100
-    maxBrightness = 600
-    
-    som = red + green + blue + white
-    factor = 1
-    if som < minBrightness:
-      factor = float(minBrightness) / float(som)
-    elif som > maxBrightness:
-      factor = float(maxBrightness) / float(som)
-      
-    red = int(red * factor)
-    green = int(green * factor)
-    blue = int(blue * factor)
-    white = int(white * factor)
-    
-    if red > 255:
-      red = 255
-    if green > 255:
-      green = 255
-    if blue > 255:
-      blue = 255
-    if white > 255:
-      white = 255
-      
-    self.requestedStatus[1] = red;
-    self.requestedStatus[2] = green;
-    self.requestedStatus[3] = blue;
-    self.requestedStatus[4] = white;
-    
-    if selfUpdate:
-      self.updateController()
-      self.updateDevices()
-
-####################### Generic helper member functions for plugin ####################### 
-  def StringToMinutes(self, value):
-    # hh:mm
-    splitted = value.split(":")
-    if len(splitted) >= 2:
-      minutes = int(splitted[len(splitted)-1]) + int(splitted[len(splitted)-2])*60
+        self.UpdateRGBDevice(1,1,self.masterLevel, color)
     else:
-      minutes = int(splitted[0])
-    return minutes  
+      self.UpdateRGBDevice(1,0,self.masterLevel, color)
+    
+    self.UpdateDevice(2,2,self.autospeed)
+    return
    
-  def UpdateDevice(self, Unit, nValue, sValue1, sValue2 = None):
+####################### Generic helper member functions for plugin ####################### 
+   
+  def UpdateRGBDevice(self, Unit, n_Value, s_Value, color):
+    # Make sure that the Domoticz device still exists (they can be deleted) before updating it 
+    if (Unit in Devices):
+      self.Log("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+":'"+str(Devices[Unit].sValue )+"':"+str(Devices[Unit].Color )+"') to: ("+str(n_Value)+":'"+str(s_Value)+"':"+str(color )+"') ", 5, 1)
+      Devices[Unit].Update(nValue=n_Value, sValue=str(s_Value), Color=color)
+    return
+    
+  def UpdateDevice(self, Unit, n_Value, sValue1, sValue2 = None):
     # Make sure that the Domoticz device still exists (they can be deleted) before updating it 
     if (Unit in Devices):
       if sValue2 is None:
-        sValue = str(sValue1)
+        s_Value = str(sValue1)
       else:
-        sValue = str(sValue1)+";"+str(sValue2)
+        s_Value = str(sValue1)+";"+str(sValue2)
         
-      if (Devices[Unit].nValue != nValue) or (Devices[Unit].sValue != sValue):
-        self.Log("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+":'"+str(Devices[Unit].sValue )+"') to: ("+str(nValue)+":'"+str(sValue)+"')", 5, 1)
-        Devices[Unit].Update(nValue, sValue)
+      if (Devices[Unit].nValue != n_Value) or (Devices[Unit].sValue != s_Value):
+        self.Log("Update ["+Devices[Unit].Name+"] from: ('"+str(Devices[Unit].nValue)+":'"+str(Devices[Unit].sValue )+"') to: ("+str(n_Value)+":'"+str(s_Value)+"')", 5, 1)
+        Devices[Unit].Update(nValue=n_Value, sValue=s_Value)
     return
    
   def DumpDeviceToLog(self,Unit):
