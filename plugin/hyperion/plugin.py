@@ -210,7 +210,7 @@ class BasePlugin:
         sourcestring = sourcestring[:-1]
       
         self.DumpVariable(effects, "Effects", Level = 4, BytesAsStr = True)
-        self.DumpVariable(self.effectFileMap, "EffectFileMap", Level = 5, BytesAsStr = True)
+        self.DumpVariable(self.effectFileMap, "EffectFileMap", Level = 6, BytesAsStr = True)
         self.SourceOptions = {'LevelActions': '|'*amount,
                'LevelNames': sourcestring,
                'LevelOffHidden': 'false',
@@ -232,33 +232,41 @@ class BasePlugin:
           Domoticz.Device(Name="Mode", Unit=2, TypeName="Selector Switch", Switchtype=18, Options=self.SourceOptions, Image=Images["HyperionMode"].ID).Create()
       
       # actual color
-      
       if ("info" in dataparsed) and ("activeLedColor" in dataparsed["info"]):
-        self.DumpVariable(dataparsed["info"]["activeLedColor"], "Active Led", Level = 8, BytesAsStr = True)
-        if ("RGB Value" in dataparsed["info"]["activeLedColor"]):
-          if (len(dataparsed["info"]["activeLedColor"]["RGB Value"]) >= 3):
-            self.currentColor[0] = dataparsed["info"]["activeLedColor"]["RGB Value"][0]
-            self.currentColor[1] = dataparsed["info"]["activeLedColor"]["RGB Value"][1]
-            self.currentColor[2] = dataparsed["info"]["activeLedColor"]["RGB Value"][2]
+        tmpdata = dataparsed["info"]["activeLedColor"]
+        if type(tmpdata) == list and len(tmpdata) > 0:
+          tmpdata = tmpdata[0]
+          
+        self.DumpVariable(tmpdata, "Active Led", Level = 8, BytesAsStr = True)
+        if ("RGB Value" in tmpdata):
+          if (len(tmpdata["RGB Value"]) >= 3):
+            self.currentColor[0] = tmpdata["RGB Value"][0]
+            self.currentColor[1] = tmpdata["RGB Value"][1]
+            self.currentColor[2] = tmpdata["RGB Value"][2]
             update = True
      
       # actual effect:
       Value = 10
       if ("info" in dataparsed) and ("activeEffects" in dataparsed["info"]):
-        self.DumpVariable(dataparsed["info"]["activeEffects"], "Active Effect", Level = 8, BytesAsStr = True)
-        if ("script" in dataparsed["info"]["activeEffects"]):
-          effectactive = self.effectFileMap[dataparsed["info"]["activeEffects"]["script"]]
+        tmpdata = dataparsed["info"]["activeEffects"]
+        if type(tmpdata) == list and len(tmpdata) > 0:
+          tmpdata = tmpdata[0]
+          
+        self.DumpVariable(tmpdata, "Active Effect", Level = 8, BytesAsStr = True)
+        if ("script" in tmpdata):
+          effectactive = tmpdata["script"]
           
           for key, val in self.selectorMap.items():
             self.Log(str(key)+": "+str(val)+" => looking for "+ str(effectactive), 8, 1)
             if (val == effectactive):
-              Value = Key
+              Value = key
               update = True
               break
           
-      if (update):
-        self.updateFromDeviceStatus()
-        self.UpdateDevices(Value)
+    if (update):
+      self.Log("Hyperion settings changed updating Domoticz", 4, 1)
+      self.updateFromDeviceStatus()
+      self.UpdateDevices(Value)
     return
 
   def sendMessage(self, jsonData):
@@ -287,6 +295,7 @@ class BasePlugin:
       self.UpdateDevices(updateLevel)
     else:
       updateLevel = 10
+      setcoloroff = False
       if (CommandStr == "Set Color" ):
         jsoncolor = json.loads(Hue)
         self.masterLevel = Level    
@@ -295,12 +304,19 @@ class BasePlugin:
         self.dimmerValues[2] = jsoncolor['b']
       elif ( CommandStr == "Set Level" ):
         self.masterLevel = Level
+        if (Level == 0):
+          setcoloroff = True
       elif ( CommandStr == "Off"):
-        updateLevel = 0
-        
-      self.currentColor[0] = self.convertMasterLevel(self.dimmerValues[0])
-      self.currentColor[1] = self.convertMasterLevel(self.dimmerValues[1])
-      self.currentColor[2] = self.convertMasterLevel(self.dimmerValues[2])
+        setcoloroff = True
+      
+      if setcoloroff:
+        self.currentColor[0] = 0
+        self.currentColor[1] = 0
+        self.currentColor[2] = 0
+      else:
+        self.currentColor[0] = self.convertMasterLevel(self.dimmerValues[0])
+        self.currentColor[1] = self.convertMasterLevel(self.dimmerValues[1])
+        self.currentColor[2] = self.convertMasterLevel(self.dimmerValues[2])
       if updateLevel > 0:
         self.sendMessage({"command" : "color", "color": self.currentColor, "priority": self.priority})
 
