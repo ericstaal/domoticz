@@ -15,7 +15,7 @@
 # 1.0.8   02-12-2018  Added source / channel name
 
 """
-<plugin key="LGtv" name="LG TV" author="elgringo" version="1.0.7" externallink="https://github.com/ericstaal/domoticz/blob/master/">
+<plugin key="LGtv" name="LG TV" author="elgringo" version="1.0.8" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
     <param field="Address" label="IP address" width="200px" required="true" default="192.168.13.15"/>
     <param field="Port" label="Port" width="30px" required="false" default="8080"/>
@@ -312,7 +312,7 @@ class BasePlugin:
     if Connection == self.connection:
       
       if (Status == 0):
-        self.Log("Connected successfully to: "+Connection.Address+":"+Connection.Port, 4, 2)
+        self.Log("Connected successfully to: "+Connection.Address+":"+Connection.Port, 5, 2)
         
         # if connect we must send data
         # depending on if a key/session/command is known
@@ -339,7 +339,6 @@ class BasePlugin:
               
               self.sendMessage(Message=cmdText, URL="/hdcp/api/dtv_wifirc") 
             else: # just request the status
-              # OK cur_channel|model_info|context_ui|
               self.sendMessage(Message="", URL="/hdcp/api/data?target=cur_channel&session="+self.session, Verb="GET")
                     
       else:
@@ -465,8 +464,11 @@ class BasePlugin:
   def onDisconnect(self, Connection):
     
     items = len(self.queuedCommands)
-    self.Log("onDisconnect "+Connection.Address+":"+Connection.Port+", still "+ str(items)+" in the queue", 4, 2)
-    
+    if items > 0:
+      self.Log("onDisconnect "+Connection.Address+":"+Connection.Port+", still "+ str(items)+" in the queue", 4, 2)
+    else:
+      self.Log("onDisconnect "+Connection.Address+":"+Connection.Port+", no more commands in the queue", 5, 2)
+      
     # if there are still command continue
     if (items > 0) and (len(self.key) > 2):
       self.DumpVariable(self.queuedCommands, "queuedCommands", Level=6)
