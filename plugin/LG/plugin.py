@@ -11,9 +11,11 @@
 # 1.0.4   25-05-2018  Removed bash ping used internal ICMP
 # 1.0.5   06-08-2018  Update logging
 # 1.0.6   10-08-2018  Fix connection issues
+# 1.0.7   20-11-2018  Let mute give a status
+# 1.0.8   02-12-2018  Added source / channel name
 
 """
-<plugin key="LGtv" name="LG TV" author="elgringo" version="1.0.6" externallink="https://github.com/ericstaal/domoticz/blob/master/">
+<plugin key="LGtv" name="LG TV" author="elgringo" version="1.0.7" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
     <param field="Address" label="IP address" width="200px" required="true" default="192.168.13.15"/>
     <param field="Port" label="Port" width="30px" required="false" default="8080"/>
@@ -72,7 +74,6 @@ from html import escape
 
 # additional imports
 import re
-import xml.etree.ElementTree as etree
 
 # bash ping
 import os
@@ -86,6 +87,8 @@ class BasePlugin:
   useBashPing = False
   tempFile = None
   
+  tvmuted = False
+  
   regexOnline = re.compile('1 packets transmitted, 1 (packets |)received')
   regexIp = re.compile('^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$')
   ip = None
@@ -93,6 +96,9 @@ class BasePlugin:
   port = 8080
   lastState = False
   key = "" 
+  source = ""  # TV / RADIO / HDMI
+  channelnumber = 0 
+  channelname = ""
   
   queuedCommands = []
   sessionState = 0 # 0 = pairing, 1 = session, 2 = command
@@ -276,9 +282,18 @@ class BasePlugin:
       Domoticz.Device(Name="TV/Radio",      Unit=7, TypeName="Switch", Image=Images["LGtvsatellite_dish"].ID).Create() 
     if (8 not in Devices):
       Domoticz.Device(Name="Mute",          Unit=8, TypeName="Switch", Image=Images["LGtvmute"].ID).Create()
+    else:
+      Devices[8].Update( 0, "Off")
     if (9 not in Devices):
       Domoticz.Device(Name="Exit",          Unit=9, TypeName="Switch", Image=Images["LGtvexit"].ID).Create()
-    
+    if (10 not in Devices): 
+      Domoticz.Device(Name="Source",        Unit=10, Type=243, Subtype=19, Switchtype=0).Create()
+    else:
+      self.UpdateDevice(10,0,"?")
+    if (11 not in Devices): 
+      Domoticz.Device(Name="Channel",       Unit=11, Type=243, Subtype=19, Switchtype=0).Create()
+    else:
+      self.UpdateDevice(11,0,"?")
     self.lastState = Devices[1].nValue != 0 # was on/off
     
     self.DumpConfigToLog()
@@ -315,14 +330,17 @@ class BasePlugin:
             
           else: # message
             items = len(self.queuedCommands)
+            self.sessionState = 2
             if items > 0:
               cmd = self.queuedCommands.pop(0)
               self.Log("Sending command '" + cmd +"', still "+str(items-1)+" command in queue", 5, 1)
               
               cmdText = '<?xml version="1.0" encoding="utf-8"?><command><session>'+self.session+'</session><name>HandleKeyInput</name><value>'+str(self.LGCodes[cmd])+'</value></command>'
-              self.sessionState = 2
-              self.sendMessage(Message=cmdText, URL="/hdcp/api/dtv_wifirc") 
               
+              self.sendMessage(Message=cmdText, URL="/hdcp/api/dtv_wifirc") 
+            else: # just request the status
+              # OK cur_channel|model_info|context_ui|
+              self.sendMessage(Message="", URL="/hdcp/api/data?target=cur_channel&session="+self.session, Verb="GET")
                     
       else:
         self.Log("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description, 4, 2)
@@ -333,20 +351,49 @@ class BasePlugin:
     return
 
   def onMessage(self, Connection, Data):
-    self.DumpVariable(Data, "OnMessage SessionState: "+ str(self.sessionState) + ", Data", Level=8, BytesAsStr = True)
+    self.DumpVariable(Data, "OnMessage SessionState: "+ str(self.sessionState) + ", Data", Level=7, BytesAsStr = True)
     
     if (Connection == self.connection):
       
       if ('Status' in Data) and ('Data' in Data):
         datastr = (Data['Data'].decode("utf-8"))
+        self.DumpVariable(datastr, "data string", Level=7, BytesAsStr = True)
         
         if (Data['Status'] == '200') and (self.sessionState == 1):
+          self.session = self.getTag(datastr, 'session')
+          self.Log("Session ID: "+self.session , 7, 1)
+
+        elif (Data['Status'] == '200'):
+          newchannelnumber = 0
+          newchannelname= ""
+          newsource = "" 
           try:
-            tree = etree.XML(Data['Data'])
-            self.session = tree.find('session').text
-            self.Log("Session ID: "+self.session , 7, 1)
+            src = self.getTag(datastr, 'type')
+            newchannelnumber = int(self.getTag(datastr, 'major'))
+            newchannelname = self.getTag(datastr, 'name')
+            
+            if (src == "satellite"):
+              newchannelnumber = 0
+              newchannelname = ""
+              newsource = "HDMI"
+            else:
+              if (newchannelnumber < 100):
+                newsource = "TV"
+              else:
+                newsource = "Radio"
           except:
             pass
+          if (self.source != newsource):
+            self.source = newsource
+            self.UpdateDevice(10,0,self.source)
+          if (self.channelnumber != newchannelnumber or self.channelname != newchannelname):
+            self.channelnumber = newchannelnumber
+            self.channelname = newchannelname
+            if (len(self.channelname)) == 0:
+              self.UpdateDevice(11,0,"?") 
+            else:
+              self.UpdateDevice(11,0,"["+str(self.channelnumber)+"] "+self.channelname) 
+ 
     else: # PING  
       if not self.useBashPing:
         if isinstance(Data, dict) and (Data["Status"] == 0): 
@@ -388,7 +435,17 @@ class BasePlugin:
       if (Unit == 7):
         self.queuedCommands.append("tv_radio")
       if (Unit == 8):
-        self.queuedCommands.append("mute")
+        if (CommandStr == "On" and not self.tvmuted):
+          self.queuedCommands.append("mute")
+          self.tvmuted = True
+        elif (CommandStr == "Off" and self.tvmuted):
+          self.queuedCommands.append("mute")
+          self.tvmuted = False
+        
+        if self.tvmuted:
+          Devices[8].Update( 1, "On")
+        else:
+          Devices[8].Update( 0, "Off")
       if (Unit == 9):
         self.queuedCommands.append("exit")
       
@@ -435,7 +492,7 @@ class BasePlugin:
           file.close()
           
           online = len(self.regexOnline.findall(text)) > 0
-          self.Log("Is device online: "+ str(online), 7, 1)
+          self.Log("Is device online: "+ str(online), 8, 1)
           os.remove(self.tempFile)
         except Exception as e:
           self.Log("Failed reading '"+self.tempFile+"' : "+ str(e), 1, 3)
@@ -443,12 +500,18 @@ class BasePlugin:
         if online: # device is online
           if not self.lastState: # last state was offline
             Devices[1].Update( 1, "On") # update
+            Devices[8].Update( 0, "Off")
+            self.tvmuted = False
             self.lastState = True 
+          self.checkConnection()
         else:
           self.session = None
           if self.lastState:
-            Devices[1].Update( 0, "Off")
             self.lastState = False
+            self.queuedCommands.clear() # clear send commands
+            Devices[1].Update( 0, "Off") # update
+            self.UpdateDevice(10,0,"?")
+            self.UpdateDevice(11,0,"?")
             
       command = 'ping -c 1 -n -s 1 -q '+ self.ip  + ' > '+self.tempFile+' &'
       subprocess.call(command , shell=True)
@@ -463,7 +526,18 @@ class BasePlugin:
     return
 
 ####################### Specific helper functions for plugin #######################   
-
+  def getTag(self, data, tag):
+    begintag = "<"+str(tag)+">"
+    begin = data.find(begintag)
+    begin = begin + len(begintag)
+    
+    end = data.find("</"+str(tag)+">")
+    returnvalue = ""
+    if (end > begin and begin >= 0):
+      returnvalue = data[begin:end]
+      
+    return returnvalue
+    
   def sendMessage(self, Message, URL, Verb="POST", Headers={ 'Content-Type': 'application/atom+xml; charset=utf-8', 'Connection': 'Keep-Alive'}):
     Headers['Host']=self.connection.Address+":"+self.connection.Port
     data = {"Verb":Verb, "URL":URL, "Headers": Headers, 'Data': Message}
