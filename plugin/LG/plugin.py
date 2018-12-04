@@ -102,6 +102,7 @@ class BasePlugin:
   maxQueued = 1
   selectorMap = {}
   
+  srcLastLive = 0
   srcRadio = 0
   srcTv = 0
   srcOff = 0
@@ -193,6 +194,7 @@ class BasePlugin:
         self.selectorMap[dictValue] = item
       dictValue = dictValue + 10
         
+    srcLastLive = self.srcTv
     if (Parameters["Mode1"].count('|') != Parameters["Mode5"].count('|')):
       self.Log("Sources ("+Parameters["Mode1"]+") and names ("+Parameters["Mode5"]+") do not match! Using only sources", 1, 3)
       
@@ -339,19 +341,17 @@ class BasePlugin:
         # TV cannot switched on externally
         newsrc = self.source
         if (CommandStr == "Set Level"):
-          self.Log("Level: "+str(Level)+", source: "+str(self.source)+" tv: "+str(self.srcTv)+"   radio: "+str(self.srcRadio), 8, 1)
-
           if Level != self.source:
-            if Level != self.srcRadio:
-              self.queuedCommands.append(self.selectorMap[Level]) 
-              newsrc = Level
-              self.UpdateDevice(1, self.source, self.source)
-            else:
-              if self.source != self.srcTv: # switching to radio requires twice the radio_tv command
+            newsrc = Level
+            if (Level == self.srcRadio or Level == self.srcTv): # check what last live source was
+              if self.srcLastLive != Level and self.source != self.srcTv and self.source != self.srcRadio:
                 self.queuedCommands.append(self.selectorMap[Level]) 
                 self.queuedCommands.append("dummy") 
+              self.queuedCommands.append(self.selectorMap[Level])
+              self.srcLastLive = Level
+            else:
               self.queuedCommands.append(self.selectorMap[Level]) 
-              newsrc = Level
+       
         elif (CommandStr == "Off"):
           newsrc = self.srcOff
           self.queuedCommands.append(self.selectorMap[self.srcOff]) 
@@ -364,7 +364,13 @@ class BasePlugin:
           self.source = newsrc
           self.UpdateDevice(1, self.source, self.source)
           self.channelnumber = -1
-
+          
+          if newsrc in self.srcHdmi:
+            self.UpdateDevice(11,0,"HDMI")
+          elif newsrc in self.srcAv:
+            self.UpdateDevice(11,0,"AV")
+          else:
+            self.UpdateDevice(11,0,"?")
       elif (Unit == 2):
         self.queuedCommands.append("volume_up") 
       elif (Unit == 3):
@@ -451,9 +457,11 @@ class BasePlugin:
           # determine source type
           if self.channelnumber >= 100:
             newsrc = self.srcRadio
+            self.srcLastLive = newsrc
             self.Log("Source determined as "+str(newsrc)+", 'Radio' (type:'"+type+", major:"+str(major)+", minor:"+minor+", physicalNum:"+physicalNum+", sourceIndex:"+sourceIndex+", name:"+name+")", 5,1)
           else:
             newsrc = self.srcTv
+            self.srcLastLive = newsrc
             self.Log("Source determined as "+str(newsrc)+", 'TV' (type:'"+type+", major:"+str(major)+", minor:"+minor+", physicalNum:"+physicalNum+", sourceIndex:"+sourceIndex+", name:"+name+")", 5,1)
         elif type == "terrestrial" and major == 0: # av
           self.UpdateDevice(11,0,"AV")
