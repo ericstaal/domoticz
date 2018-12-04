@@ -103,8 +103,6 @@ class BasePlugin:
   pollingDict =  {"ZM":"SI?\r", "SI":"MV?\r", "MV":"MU?\r", "MU":"ZM?\r" }
   lastMessage = "ZM"
   lastHeartbeat = datetime.datetime.now()
-
-  SourceOptions = {}
   
   errorReported = False
   wasConnected = False # check if was connected if so cdestroy the connection
@@ -165,12 +163,12 @@ class BasePlugin:
     if (Parameters["Mode3"].count('|') != Parameters["Mode4"].count('|')):
       self.Log("Sources ("+Parameters["Mode3"]+") and names ("+Parameters["Mode4"]+") do not match! Using only sources", 1, 3)
       
-      self.SourceOptions = {'LevelActions': '|'*Parameters["Mode3"].count('|'),
+      sourceOptions = {'LevelActions': '|'*Parameters["Mode3"].count('|'),
                'LevelNames': Parameters["Mode3"],
                'LevelOffHidden': 'false',
                'SelectorStyle': '0'} # 1 = combobox, 0 = buttons
     else:
-      self.SourceOptions = {'LevelActions': '|'*Parameters["Mode4"].count('|'),
+      sourceOptions = {'LevelActions': '|'*Parameters["Mode4"].count('|'),
                'LevelNames': Parameters["Mode4"],
                'LevelOffHidden': 'false',
                'SelectorStyle': '0'}
@@ -181,16 +179,16 @@ class BasePlugin:
     if ("DenonMarantzboombox" not in Images): Domoticz.Image('DenonMarantzboombox.zip').Create()
     
     if (2 not in Devices): 
-      Domoticz.Device(Name="Source", Unit=2, TypeName="Selector Switch", Switchtype=18, Image=5, Options=self.SourceOptions).Create()
+      Domoticz.Device(Name="Source", Unit=2, TypeName="Selector Switch", Switchtype=18, Image=5, Options=sourceOptions).Create()
       if (len(Devices[2].sValue) > 0):
         self.mainSource = int(Devices[2].sValue)
         self.mainOn = (Devices[2].nValue != 0)
-    elif (Devices[2].Options != self.SourceOptions):
+    elif (Devices[2].Options != sourceOptions):
       self.Log("Sources or names have changed.", Level = 2, Type = 1)
       
       # update does not work, so delte it and readd it.
       Devices[2].Delete()
-      Domoticz.Device(Name="Source",     Unit=2, TypeName="Selector Switch", Switchtype=18, Image=5, Used=1, Options=self.SourceOptions).Create()
+      Domoticz.Device(Name="Source",     Unit=2, TypeName="Selector Switch", Switchtype=18, Image=5, Used=1, Options=sourceOptions).Create()
       
     if (3 not in Devices): 
       Domoticz.Device(Name="Volume",     Unit=3, Type=244, Subtype=73, Switchtype=7, Image=8).Create()
