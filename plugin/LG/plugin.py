@@ -13,7 +13,8 @@
 # 1.0.6   10-08-2018  Fix connection issues
 # 1.0.7   20-11-2018  Let mute give a status
 # 1.0.8   02-12-2018  Added source / channel name
-# 1.1.0   05-12-2018  Input as selector, removed ping
+# 1.1.0   04-12-2018  Input as selector, removed ping
+# 1.1.1   05-12-2018  Cleanup some code
 
 """
 <plugin key="LGtv" name="LG TV" author="elgringo" version="1.1.0" externallink="https://github.com/ericstaal/domoticz/blob/master/">
@@ -44,7 +45,7 @@
       </options>
     </param>
     <param field="Mode4" label="Pairing key" width="200px" default="" /> 
-    <param field="Mode1" label="Sources" width="550px" required="true" default="off|tv|hdmi1|radio"/>
+    <param field="Mode1" label="Sources (eg: off|tv|hdmi1|hdmi4|radio|av1|av3|usb)" width="550px" required="true" default="off|tv|hdmi1|radio"/>
     <param field="Mode5" label="Sources name" width="550px" required="true" default="Off|TV|Receiver|Radio"/>
     <param field="Mode6" label="Debug level" width="150px">
       <options>
@@ -92,9 +93,7 @@ class BasePlugin:
   
   regexIp = re.compile('^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$')
   
-  
   source = 0 # based on mode1 and mode5 (1 is actual, 5 is name)
-  channelnumber = 0 
   
   queuedCommands = []
   sessionState = 0 # 0 = pairing, 1 = session, 2 = command/poll
@@ -171,8 +170,6 @@ class BasePlugin:
     dictValue = 0
     sourceOptions = {}
     for item in Parameters["Mode1"].split('|'):
-      
-      
       # parse into type, since we cannot read all specific types...
       if item == "off":
         self.srcOff = dictValue
@@ -245,7 +242,7 @@ class BasePlugin:
     if (11 not in Devices): 
       Domoticz.Device(Name="Channel",       Unit=11, Type=243, Subtype=19, Switchtype=0).Create()
     else:
-      self.UpdateDevice(11,0,"?")
+      self.UpdateDevice(11,0,"Off")
     self.lastConnected = False
     
     self.DumpConfigToLog()
@@ -263,7 +260,7 @@ class BasePlugin:
       # device connected
       if not self.lastConnected: # last state was offline
         # source is updated of first status message
-        self.UpdateDevice(11,0,"?")
+        self.setSourceDevice(10) # 10 is probably the first valid input
         self.UpdateDevice(8,0,"Off")
         self.tvmuted = False
         self.lastConnected = True 
@@ -298,14 +295,12 @@ class BasePlugin:
     else: # status != 0
       self.Log("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description, 5, 2)
       
-      self.source = self.srcOff
-      self.UpdateDevice(1, 0, self.source)
+      self.setSourceDevice(self.srcOff)
       self.lastConnected = False
       self.tvmuted = False
       self.queuedCommands.clear() # clear send commands
       self.session = None
       self.sessionState = 0
-      self.UpdateDevice(11,0,"?")
       self.UpdateDevice(8,0,"Off") 
       
     return
@@ -338,7 +333,6 @@ class BasePlugin:
     currentlen = len(self.queuedCommands)
     if self.maxQueued > currentlen:
       if (Unit == 1):
-        # TV cannot switched on externally
         newsrc = self.source
         if (CommandStr == "Set Level"):
           if Level != self.source:
@@ -346,7 +340,7 @@ class BasePlugin:
             if (Level == self.srcRadio or Level == self.srcTv): # check what last live source was
               if self.srcLastLive != Level and self.source != self.srcTv and self.source != self.srcRadio:
                 self.queuedCommands.append(self.selectorMap[Level]) 
-                self.queuedCommands.append("dummy") 
+                self.queuedCommands.append("stopSending") 
               self.queuedCommands.append(self.selectorMap[Level])
               self.srcLastLive = Level
             else:
@@ -360,17 +354,8 @@ class BasePlugin:
             newsrc = self.srcTv 
             self.queuedCommands.append(self.selectorMap[self.srcTv])
                        
-        if (newsrc != self.source):
-          self.source = newsrc
-          self.UpdateDevice(1, self.source, self.source)
-          self.channelnumber = -1
-          
-          if newsrc in self.srcHdmi:
-            self.UpdateDevice(11,0,"HDMI")
-          elif newsrc in self.srcAv:
-            self.UpdateDevice(11,0,"AV")
-          else:
-            self.UpdateDevice(11,0,"?")
+        self.setSourceDevice(newsrc)
+       
       elif (Unit == 2):
         self.queuedCommands.append("volume_up") 
       elif (Unit == 3):
@@ -412,8 +397,8 @@ class BasePlugin:
       self.Log("onDisconnect "+Connection.Address+":"+Connection.Port+", still "+ str(items)+" in the queue", 4, 2)
       if (len(self.key) > 2): # if there are still command continue (and key must be present of course)
         self.DumpVariable(self.queuedCommands, "queuedCommands", Level=6)
-        if (self.queuedCommands[0] == "dummy"):
-          self.Log("Dummy command found, wait until next connection to continue", 4, 2)
+        if (self.queuedCommands[0] == "stopSending"):
+          self.Log("stopSending command found, wait until next connection to continue", 4, 2)
         else:
           self.checkConnection()
     else:
@@ -425,66 +410,92 @@ class BasePlugin:
     if ((len(self.queuedCommands) == 0) and (len(self.key) > 2)): # only check connection when not active used (commands beeing send)
       self.Log("onHeartbeat called, check connection", 9,1)
       self.checkConnection()
-    elif (self.queuedCommands[0] == "dummy"):
-      self.Log("onHeartbeat called, dummy command dropped, check connection", 4,1)
+    elif (self.queuedCommands[0] == "stopSending"):
+      self.Log("onHeartbeat called, stopSending command dropped, check connection", 4,1)
       self.queuedCommands.pop(0)
       self.checkConnection()
     return
 
 ####################### Specific helper functions for plugin #######################   
+  def setSourceDevice(self, src, txt = None):
+    if (txt is None):
+      if (src == self.srcOff):
+        txt = "Off"
+      elif (src == self.srcRadio):
+        txt = "Radio"
+      elif (src == self.srcTv):
+        txt = "TV" 
+      elif (src in self.srcHdmi):
+        txt = "HDMI"
+      elif (src in self.srcAv):
+        txt = "AV"
+      else:
+        txt = "?"
+    
+    if (src != self.source):
+      self.source = src
+      self.UpdateDevice(1, self.source, self.source)
+      self.UpdateDevice(11,0,txt)
+      self.Log("Set source from "+str(self.source)+" to "+str(src)+" and text to '"+txt+"'", 5, 1)
+    elif (src == self.srcTv or src == self.srcRadio):
+      self.UpdateDevice(11,0,txt)
+      self.Log("Set text to '"+txt+"'", 5, 1)
+      
+      
   def determineSource(self, xmldata):
     #try:
+    
+    txt = None
+    src = self.source
+    error = False
+    
     type = self.getTag(xmldata, 'type')
+    
     if (len(type) > 0):
+      major = int(self.getTag(xmldata, 'major')) # channel number
       if not self.lastConnected:
-        newsrc = self.srcOff
-        self.UpdateDevice(11,0, "?") 
+        src = self.srcOff
       else:
-        
-        major = int(self.getTag(xmldata, 'major')) # channel number
-        name = self.getTag(xmldata, 'name') # channel name
+        if type == "cable":
+          name = self.getTag(xmldata, 'name')
+          txt = "["+str(major)+"] "+name
+          
+          if major >= 100:
+            src = self.srcRadio
+          else:
+            src = self.srcTv
+          self.srcLastLive = src
+        elif type == "terrestrial" and major == 0: # av 
+          txt = "AV"
+          if len(self.srcAv) > 0:
+            if src not in self.srcAv:
+              src = self.srcAv[0]
+        elif type == "satellite" and major == 16368: # hdmi
+          txt = "HDMI" 
+          if len(self.srcHdmi) > 0:
+            if src not in self.srcHdmi:
+              src = self.srcHdmi[0]
+        else:
+          txt = "?" 
+          error = True
+          
+      if error or self.logLevel >= 5:
+        if (name is None):
+          name = self.getTag(xmldata, 'name')
         physicalNum = self.getTag(xmldata, 'physicalNum')
         sourceIndex = self.getTag(xmldata, 'sourceIndex')
         minor = self.getTag(xmldata, 'minor')
-          
-        newsrc = self.source
-        if type == "cable":
-          # update channel info
-          if self.channelnumber != major:
-            self.channelnumber = major
-            self.UpdateDevice(11,0,"["+str(self.channelnumber)+"] "+name) 
-          
-          # determine source type
-          if self.channelnumber >= 100:
-            newsrc = self.srcRadio
-            self.srcLastLive = newsrc
-            self.Log("Source determined as "+str(newsrc)+", 'Radio' (type:'"+type+", major:"+str(major)+", minor:"+minor+", physicalNum:"+physicalNum+", sourceIndex:"+sourceIndex+", name:"+name+")", 5,1)
-          else:
-            newsrc = self.srcTv
-            self.srcLastLive = newsrc
-            self.Log("Source determined as "+str(newsrc)+", 'TV' (type:'"+type+", major:"+str(major)+", minor:"+minor+", physicalNum:"+physicalNum+", sourceIndex:"+sourceIndex+", name:"+name+")", 5,1)
-        elif type == "terrestrial" and major == 0: # av
-          self.UpdateDevice(11,0,"AV")
-          if len(self.srcAv) > 0:
-            if self.source not in self.srcAv:
-              newsrc = self.srcAv[0]
-          else:
-            newsrc = 0
-          self.Log("Source determined as "+str(newsrc)+", 'AV' (type:'"+type+", major:"+str(major)+", minor:"+minor+", physicalNum:"+physicalNum+", sourceIndex:"+sourceIndex+", name:"+name+")", 5,1)          
-        elif type == "satellite" and major == 16368: # hdmi
-          self.UpdateDevice(11,0,"HDMI") 
-          if len(self.srcHdmi) > 0:
-            if self.source not in self.srcHdmi:
-              newsrc = self.srcHdmi[0]
-          else:
-            newsrc = 0
-          self.Log("Source determined as "+str(newsrc)+", 'HDMI' (type:'"+type+", major:"+str(major)+", minor:"+minor+", physicalNum:"+physicalNum+", sourceIndex:"+sourceIndex+", name:"+name+")", 5,1)
+        
+        if (error):
+          self.Log("Could not determine source type:'"+type+", major:"+str(major)+", minor:"+minor+", physicalNum:"+physicalNum+", sourceIndex:"+sourceIndex+", name:"+name, 2, 3)
         else:
-          self.Log("Could not determine source type:'"+type+", major:"+str(major)+", minor:"+minor+", physicalNum:"+physicalNum+", sourceIndex:"+sourceIndex+", name:"+name, 2,3)
-               
-      if newsrc != self.source:
-        self.source = newsrc
-        self.UpdateDevice(1, self.source, self.source)
+          if src in self.selectorMap:
+            self.Log("Source determined as "+str(src)+"("+self.selectorMap[src] +"), '"+txt+"' (type:'"+type+", major:"+str(major)+", minor:"+minor+", physicalNum:"+physicalNum+", sourceIndex:"+sourceIndex+", name:"+name+")", 5, 1)
+          else:
+            self.Log("Source determined as "+str(src)+", '"+txt+"' (type:'"+type+", major:"+str(major)+", minor:"+minor+", physicalNum:"+physicalNum+", sourceIndex:"+sourceIndex+", name:"+name+")", 5, 1)
+        
+    self.setSourceDevice(src, txt)
+    
     #except:
     #  pass
       
