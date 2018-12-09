@@ -16,9 +16,11 @@
 # 1.0.4   20-06-2018  Solved issue with max open messages
 # 1.0.5   06-08-2018  Update logging
 # 2.0.0   13-11-2018  Changed to RGBW colorpicker, added modes, updated icons
+# 2.0.1   09-12-2018  Updated bug with speed change and custom mode
+
 
 """
-<plugin key="Ledenet" name="LedeNet" author="elgringo" version="2.0.0" externallink="https://github.com/ericstaal/domoticz/blob/master/">
+<plugin key="Ledenet" name="LedeNet" author="elgringo" version="2.0.1" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
     <param field="Address" label="IP Address" width="200px" required="true" default="192.168.13.80"/>
     <param field="Port" label="Port" width="30px" required="true" default="5577"/>
@@ -78,7 +80,7 @@ class BasePlugin:
   commandStatus = b'\x81\x8A\x8B\x96'
   
   currentStatus = [False,0,0,0,0]        # 0 = True/False (on/off), 1=Red, 2=Green, 3=Blue, 4=white, Status from the lightOn
-  currentmode = 0x61                     # current mode static|or...
+  currentmode = 0x61                     # current mode static|or... are real modues
   currentspeed = 0                       # 0x1-0x1f
   
   mode = 0                               # from rgb picker
@@ -86,7 +88,7 @@ class BasePlugin:
   dimmerValues = [0,0,0,0]               # RGBW values from control, used to determine requestedstatus
   power = False                          # from rgb picker,
   autospeed = 1                          # auto mode speed [1-100%] 
-  automode = 0                           # auto mode
+  automode = 0                           # auto mode, real mode or 1 2,3,4 for custom mode
   custommodechanged = False
   selectorMap = {}
   
@@ -178,7 +180,7 @@ class BasePlugin:
     self.selectorMap[150] = 0x2F
       
     SourceOptions = {'LevelActions': "|||||||||||||||",
-                     'LevelNames': "Static|Custom 1|Custom 2|Custom 3|Custom 4|Multi color|Red|Green|Glue|Yellow|Cyan|Purple|White|Red Green|Red Blue|Green Blue",
+                     'LevelNames': "Static|Custom 1|Custom 2|Custom 3|Custom 4|Multi color|Red|Green|Blue|Yellow|Cyan|Purple|White|Red Green|Red Blue|Green Blue",
                      'LevelOffHidden': 'false',
                      'SelectorStyle': '1'}
     
@@ -228,10 +230,6 @@ class BasePlugin:
         tempstatus[3] = self.readata[8] # Blue
         tempstatus[4] = self.readata[9] # White
 
-        adjcurrentmode = self.currentmode
-        if adjcurrentmode < 10:
-          adjcurrentmode = 0x60
-          
         if (tempmode == 0x61):
           if (tempstatus != self.currentStatus or tempmode != self.currentmode or tempspeed != self.currentspeed):
             self.Log("LedeNet changed R:%d, G:%d, B:%d, W:%d, Speed:0x%X, Mode:0x%X, pwr:%d => R:%d, G:%d, B:%d, W:%d, Speed:0x%X, Mode:0x%X, pwr:%d" %
@@ -244,7 +242,7 @@ class BasePlugin:
             self.updateFromDeviceStatus()
 
             
-        elif (tempstatus[0] != self.currentStatus[0] or tempmode != adjcurrentmode or tempspeed != self.currentspeed):
+        elif (tempstatus[0] != self.currentStatus[0] or tempmode != self.currentmode or tempspeed != self.currentspeed):
           self.Log("LedeNet changed Speed:0x%X, Mode:0x%X, pwr:%d => Speed:0x%X, Mode:0x%X, pwr:%d" %
           (self.currentspeed, self.currentmode, self.currentStatus[0], tempspeed, tempmode, tempstatus[0]), 6, 2)
           
@@ -302,6 +300,7 @@ class BasePlugin:
         self.dimmerValues[3] = jsoncolor['ww']
         self.mode = int( jsoncolor['m'] )
         self.automode = 0x61
+        self.power = self.dimmerValues[0] > 0 or self.dimmerValues[1] > 0 or self.dimmerValues[2] > 0 or self.dimmerValues[3] > 0
 
     # update controler
     self.updateController()
@@ -348,7 +347,7 @@ class BasePlugin:
     
     if not self.power:
       self.automode = 0x61
-    elif self.currentmode < 10:
+    elif self.currentmode == 0x60 and self.automode < 0:
       self.automode = 1 # custom mode, use the first one
     else:
       self.automode = self.currentmode
@@ -462,7 +461,7 @@ class BasePlugin:
         requestedStatus[4] = self.convertMasterLevel( self.dimmerValues[3] )
       else:
         requestedStatus[4] = 0
-      self.Log("Current: " + str(self.currentStatus) + " requested: " + str(requestedStatus), 7, 1)
+      
   
       for i in range(1,5):
         if self.currentStatus[i] != requestedStatus[i]:
@@ -471,6 +470,7 @@ class BasePlugin:
       
       # update color
       if updateColor:
+        self.Log("Current: " + str(self.currentStatus) + " requested: " + str(requestedStatus), 4, 1)
         checksum = (requestedStatus[1] + requestedStatus[2] + requestedStatus[3] + 0x3F +(requestedStatus[4] - 0xFF)) % 0x100
         msg = bytes([0x31, requestedStatus[1], requestedStatus[2], requestedStatus[3], requestedStatus[4], 0x00, 0x0F, checksum])
         self.connection.Send(msg)
@@ -493,17 +493,16 @@ class BasePlugin:
       elif newspeed < 0x01:
         newspeed = 0x01
        
-      if (self.currentmode != self.automode or self.currentspeed != newspeed):
-        self.Log("Speed level:%d speed changed from:0x%X to 0x%X Mode changed from:0x%X to 0x%X"% (self.autospeed, self.currentspeed, newspeed, self.currentmode, self.automode ), 6, 1)
-        self.currentmode = self.automode
-        if self.currentmode < 10:
-          self.currentmode = 0x60
+      adjmode = self.automode
+      if adjmode < 10:
+        adjmode = 0x60
+              
+      if (self.currentmode != adjmode or self.currentspeed != newspeed or self.custommodechanged):
+        self.Log("Speed level:%d speed changed from:0x%X to 0x%X Mode changed from:0x%X to 0x%X (0x%X)"% (self.autospeed, self.currentspeed, newspeed, self.currentmode, adjmode, self.automode), 6, 1)
+        self.currentmode = adjmode
         self.currentspeed = newspeed
         
-        if (self.automode <= 10):
-          self.programCustom(self.automode)
-        else:
-          # predefined
+        if (self.currentmode != 0x60) or (not self.programCustom(self.automode)):
           checksum = (0x61 + self.currentmode + self.currentspeed + 0x0F ) % 0x100
         
           msg = bytes([0x61, self.currentmode, self.currentspeed, 0x0F, checksum])
