@@ -15,9 +15,15 @@
 # 1.0.8   02-12-2018  Added source / channel name
 # 1.1.0   04-12-2018  Input as selector, removed ping
 # 1.1.1   05-12-2018  Cleanup some code
+# 1.1.2   14-02-2019  Connection fix
+# 1.1.3   16-03-2019  Clear dropped comands on start
+# 1.1.4   06-04-2019  Destroy connection when it took more than 60 seconds
+# 1.1.5   12-05-2019  Insert exit command when last send command was a while ago (to wake up TV)
+# 1.1.6   02-01-2020  Auto drop commands after 5 minutes no activity
+# 1.1.7   26-04-2020 drop command wehn not send for 30 in heartbeart
 
 """
-<plugin key="LGtv" name="LG TV" author="elgringo" version="1.1.0" externallink="https://github.com/ericstaal/domoticz/blob/master/">
+<plugin key="LGtv" name="LG TV" author="elgringo" version="1.1.7" externallink="https://github.com/ericstaal/domoticz/blob/master/">
   <params>
     <param field="Address" label="IP address" width="200px" required="true" default="192.168.13.15"/>
     <param field="Port" label="Port" width="30px" required="false" default="8080"/>
@@ -74,10 +80,7 @@ from html import escape
 
 # additional imports
 import re
-
-# bash ping
-import os
-import subprocess
+import time
 
 class BasePlugin:
   
@@ -108,6 +111,9 @@ class BasePlugin:
   srcHdmi = []
   srcAv = []
   
+  lastStartConnectTime = 0
+  lastCommandTime = 0
+  
   # dictionary with all codes
   LGCodes = { "status_bar": 35, "quick_menu": 69, "home_menu": 67, "premium_menu": 89, "installation_menu": 207, "factory_advanced_menu1": 251, "factory_advanced_menu2": 255,
               "power_off": 8, "sleep_timer": 14, "left": 7, "right": 6, "up": 64, "down": 65, "select": 68, "back": 40, "exit": 91, "red": 114, "green": 113, "yellow": 99,
@@ -126,12 +132,20 @@ class BasePlugin:
     
     if self.connection is None:
       self.connection = Domoticz.Connection(Name="LG_TCP", Transport="TCP/IP", Protocol="HTTP", Address=Parameters["Address"], Port=Parameters["Port"])
-    
-    if self.connection.Connected():
-      isConnected = True
+      self.Log("checkConnection: Connection created", 9, 1)
     else:
-      if (not self.connection.Connecting()) and (not checkonly):
-        self.connection.Connect()
+      if self.connection.Connected():
+        isConnected = True
+      else:
+        if (not self.connection.Connecting()) and (not checkonly):
+          self.connection.Connect()
+          self.lastStartConnectTime = time.time()
+          self.Log("checkConnection: Trying to connect", 9, 1)
+        else:
+          nu = time.time()
+          if (nu - self.lastStartConnectTime) > 60:
+            self.connection = None
+            self.Log("checkConnection: last connection attempt took more than "+str(nu -self.lastStartConnectTime)+" seconds. Destroy connection", 5, 3)
     
     return isConnected
     
@@ -261,6 +275,12 @@ class BasePlugin:
       if not self.lastConnected: # last state was offline
         # source is updated of first status message
         self.setSourceDevice(10) # 10 is probably the first valid input
+        self.lastCommandTime = 0
+        
+        if len(self.queuedCommands) > 0:
+          self.Log("New connection made dropped "+str(len(self.queuedCommands))+" commands", 4, 2)
+          self.queuedCommands.clear()
+          
         self.UpdateDevice(8,0,"Off")
         self.tvmuted = False
         self.lastConnected = True 
@@ -293,12 +313,12 @@ class BasePlugin:
           else: # just request the status
             self.sendMessage(Message="", URL="/hdcp/api/data?target=cur_channel&session="+self.session, Verb="GET")
     else: # status != 0
-      self.Log("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description, 5, 2)
-      
+      self.Log("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description+" dropped "+str(len(self.queuedCommands))+" commands", 5, 2)
+        
       self.setSourceDevice(self.srcOff)
       self.lastConnected = False
       self.tvmuted = False
-      self.queuedCommands.clear() # clear send commands
+      self.queuedCommands.clear()
       self.session = None
       self.sessionState = 0
       self.UpdateDevice(8,0,"Off") 
@@ -331,7 +351,20 @@ class BasePlugin:
 
     #self.DumpVariable(self.selectorMap, "selectormap: ", Level=7, BytesAsStr = True)
     currentlen = len(self.queuedCommands)
+    nu = time.time()
+        
     if self.maxQueued > currentlen:
+      # send command to wake up TV
+      
+      if (nu - self.lastCommandTime) > 250:
+        if self.lastCommandTime == 0:
+          self.Log("onCommand: no command send yet. Insert additional exit to wake TV", 4, 2)
+        else:
+          self.Log("onCommand: last command send "+str(nu - self.lastCommandTime)+" seconds ago. Insert additional exit to wake TV", 4, 2)
+        self.queuedCommands.append("exit") 
+        
+      self.lastCommandTime = time.time()
+        
       if (Unit == 1):
         newsrc = self.source
         if (CommandStr == "Set Level"):
@@ -383,7 +416,7 @@ class BasePlugin:
       if len(self.queuedCommands) > 0 and currentlen == 0:
         self.checkConnection()
     else:
-      self.Log("Still "+ str(len(self.queuedCommands))+ " commands queued, drop this command" , 6, 1)
+      self.Log("Still "+ str(len(self.queuedCommands))+ " commands queued, drop this command" , 4, 1)
       
     return
 
@@ -402,18 +435,27 @@ class BasePlugin:
         else:
           self.checkConnection()
     else:
-      self.Log("onDisconnect "+Connection.Address+":"+Connection.Port+", no more commands in the queue", 5, 2)
+      self.Log("onDisconnect "+Connection.Address+":"+Connection.Port+", no more commands in the queue", 6, 2)
         
     return
 
   def onHeartbeat(self):
-    if ((len(self.queuedCommands) == 0) and (len(self.key) > 2)): # only check connection when not active used (commands beeing send)
+    #clean up old not executed command (older than 30 seconds)
+    currentlen = len(self.queuedCommands)
+    nu = time.time()
+    if ((nu - self.lastCommandTime) > 30) and (currentlen > 0) :
+      self.Log("onHeartbeat: last command send "+str(nu - self.lastCommandTime)+" seconds ago, still "+str(currentlen)+" commands waiting, all dropped", 4, 3)
+      self.queuedCommands.clear()
+      currentlen = 0
+    
+    if (currentlen == 0 ): 
       self.Log("onHeartbeat called, check connection", 9,1)
       self.checkConnection()
-    elif (self.queuedCommands[0] == "stopSending"):
+    elif ((currentlen > 0) and self.queuedCommands[0] == "stopSending"):
       self.Log("onHeartbeat called, stopSending command dropped, check connection", 4,1)
       self.queuedCommands.pop(0)
       self.checkConnection()
+
     return
 
 ####################### Specific helper functions for plugin #######################   
@@ -448,6 +490,7 @@ class BasePlugin:
     txt = None
     src = self.source
     error = False
+    name = None
     
     type = self.getTag(xmldata, 'type')
     
