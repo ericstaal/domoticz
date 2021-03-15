@@ -20,7 +20,8 @@
 # 1.1.4   06-04-2019  Destroy connection when it took more than 60 seconds
 # 1.1.5   12-05-2019  Insert exit command when last send command was a while ago (to wake up TV)
 # 1.1.6   02-01-2020  Auto drop commands after 5 minutes no activity
-# 1.1.7   26-04-2020 drop command wehn not send for 30 in heartbeart
+# 1.1.7   26-04-2020  Drop command wehn not send for 30 in heartbeart
+# 1.1.8   30-05-2020  Cleanup connection when commands are drop 
 
 """
 <plugin key="LGtv" name="LG TV" author="elgringo" version="1.1.7" externallink="https://github.com/ericstaal/domoticz/blob/master/">
@@ -145,7 +146,7 @@ class BasePlugin:
           nu = time.time()
           if (nu - self.lastStartConnectTime) > 60:
             self.connection = None
-            self.Log("checkConnection: last connection attempt took more than "+str(nu -self.lastStartConnectTime)+" seconds. Destroy connection", 5, 3)
+            self.Log("checkConnection: last connection attempt took more than "+str(round(nu -self.lastStartConnectTime,1))+" seconds. Destroy connection", 5, 3)
     
     return isConnected
     
@@ -277,10 +278,7 @@ class BasePlugin:
         self.setSourceDevice(10) # 10 is probably the first valid input
         self.lastCommandTime = 0
         
-        if len(self.queuedCommands) > 0:
-          self.Log("New connection made dropped "+str(len(self.queuedCommands))+" commands", 4, 2)
-          self.queuedCommands.clear()
-          
+         
         self.UpdateDevice(8,0,"Off")
         self.tvmuted = False
         self.lastConnected = True 
@@ -313,7 +311,15 @@ class BasePlugin:
           else: # just request the status
             self.sendMessage(Message="", URL="/hdcp/api/data?target=cur_channel&session="+self.session, Verb="GET")
     else: # status != 0
-      self.Log("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description+" dropped "+str(len(self.queuedCommands))+" commands", 5, 2)
+      loglevel=3
+      logtype=3
+      if Status == 113:
+        # no route, tv is off
+        loglevel=7
+        logtype=1
+        
+      self.Log("Failed to connect ("+str(Status)+") to: "+Connection.Address+":"+Connection.Port+" with error: "+Description+" dropped "+str(len(self.queuedCommands))+" commands", loglevel, logtype) 
+      
         
       self.setSourceDevice(self.srcOff)
       self.lastConnected = False
@@ -360,7 +366,7 @@ class BasePlugin:
         if self.lastCommandTime == 0:
           self.Log("onCommand: no command send yet. Insert additional exit to wake TV", 4, 2)
         else:
-          self.Log("onCommand: last command send "+str(nu - self.lastCommandTime)+" seconds ago. Insert additional exit to wake TV", 4, 2)
+          self.Log("onCommand: last command send "+str(round(nu - self.lastCommandTime,1))+" seconds ago. Insert additional exit to wake TV", 4, 2)
         self.queuedCommands.append("exit") 
         
       self.lastCommandTime = time.time()
@@ -444,9 +450,10 @@ class BasePlugin:
     currentlen = len(self.queuedCommands)
     nu = time.time()
     if ((nu - self.lastCommandTime) > 30) and (currentlen > 0) :
-      self.Log("onHeartbeat: last command send "+str(nu - self.lastCommandTime)+" seconds ago, still "+str(currentlen)+" commands waiting, all dropped", 4, 3)
+      self.Log("onHeartbeat: last command send "+str(round(nu - self.lastCommandTime,1))+" seconds ago, still "+str(currentlen)+" commands waiting, all dropped", 4, 3)
       self.queuedCommands.clear()
       currentlen = 0
+      self.connection = None
     
     if (currentlen == 0 ): 
       self.Log("onHeartbeat called, check connection", 9,1)
